@@ -85,7 +85,16 @@ any → FAILED / REFUNDED / CANCELLED       (webhook or explicit admin action)
 Client-side payment status is never trusted (§9). A period generation job
 (cron-triggered) creates the next `BillingPeriod` when the current one's
 `dueDate` has passed, using `BillingPlan.billingDay`/`frequency` — it never
-edits a past period.
+edits a past period. The *first* `BillingPeriod` is created synchronously
+when the `BillingPlan` itself is created (client onboarded onto a service),
+not deferred to the next cron run — a new client should never show as
+"no billing" simply because the daily job hasn't run yet.
+
+`BillingPeriod.amountInPaise` is snapshotted from `BillingPlan.amountInPaise`
+at generation time, not read live from the plan — so changing a client's fee
+only affects periods generated after the change, and every past period keeps
+the amount that was actually billed (§36: never rewrite historical financial
+records).
 
 ## Webhook processing
 
