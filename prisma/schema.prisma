@@ -1,0 +1,590 @@
+// ClientOS — schema for Rohit's marketing/SEO agency client management.
+// Multi-tenant-ready (every business-owned table carries organizationId)
+// but V1 has exactly one Organization row and no org-switcher UI.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  CHURNED
+}
+
+enum ServiceStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum BillingFrequency {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  ONE_TIME
+}
+
+// Full lifecycle from spec §8. Computed by the priority engine at read time
+// from dueDate + payments, EXCEPT the terminal/manual ones (PAID is set by
+// a trusted Razorpay webhook only; REFUNDED/CANCELLED are explicit actions).
+enum BillingPeriodStatus {
+  UPCOMING
+  DUE
+  DUE_TODAY
+  OVERDUE
+  PARTIALLY_PAID
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+// Matches Razorpay's own payment entity states exactly.
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  SKIPPED
+}
+
+enum RecurrenceType {
+  MONTHLY
+  WEEKLY
+  ONE_TIME
+  CUSTOM
+}
+
+// Exactly the states listed in spec §19.
+enum RenewalStatus {
+  ACTIVE
+  RENEWAL_UPCOMING
+  RENEWAL_DISCUSSION
+  RENEWED
+  CANCELLED
+  EXPIRED
+}
+
+enum ReminderTrigger {
+  BEFORE_DUE
+  AFTER_OVERDUE
+}
+
+enum ReminderChannel {
+  EMAIL
+  WHATSAPP
+}
+
+// AUTOMATIC sends immediately when scheduled (still gated by the org-level
+// switch below). APPROVAL_REQUIRED creates a ReminderJob in PENDING_APPROVAL
+// and never sends until an admin explicitly approves it (spec §15).
+enum ReminderMode {
+  AUTOMATIC
+  APPROVAL_REQUIRED
+}
+
+enum ReminderJobStatus {
+  SCHEDULED
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  SKIPPED
+  FAILED
+  CANCELLED
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+}
+
+// =============================================================================
+// ORG / AUTH — multi-tenant scaffold. V1: exactly one Organization, one (or
+// a few) AdminUser rows, no invite flow, no roles/permissions.
+// =============================================================================
+
+model Organization {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(120)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings      OrganizationSettings?
+  adminUsers    AdminUser[]
+  clients       Client[]
+  serviceTemplates ServiceTemplate[]
+  webhookEvents WebhookEvent[]
+  reminderRules ReminderRule[]
+  auditLogs     AuditLog[]
+
+  @@map("organizations")
+}
+
+// The global safety switch from spec §14. Enforced server-side in the one
+// code path allowed to call an email/WhatsApp provider — never a UI-only flag.
+model OrganizationSettings {
+  id                                     Int      @id @default(autoincrement())
+  organizationId                         Int      @unique
+  automaticClientCommunicationEnabled    Boolean  @default(false)
+  createdAt                              DateTime @default(now())
+  updatedAt                              DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("organization_settings")
+}
+
+// Sessions are DB-backed opaque tokens (not stateless JWTs) so a session can
+// actually be revoked server-side.
+model AdminUser {
+  id             Int       @id @default(autoincrement())
+  organizationId Int
+  email          String    @unique @db.VarChar(191)
+  passwordHash   String    @db.VarChar(255)
+  name           String?   @db.VarChar(120)
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  sessions          AdminSession[]
+  auditLogs         AuditLog[]
+  clientNotes       ClientNote[]
+  refundsInitiated  Refund[]
+  reminderApprovals ReminderJob[]
+
+  @@index([organizationId])
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id          Int      @id @default(autoincrement())
+  token       String   @unique @db.VarChar(64)
+  adminUserId Int
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id])
+
+  @@index([adminUserId])
+  @@map("admin_sessions")
+}
+
+// Generic admin action trail (distinct from ClientActivity, which is the
+// client-facing timeline specifically).
+model AuditLog {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  adminUserId    Int?
+  action         String   @db.VarChar(100)
+  entityType     String   @db.VarChar(60)
+  entityId       String   @db.VarChar(60)
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  adminUser    AdminUser?   @relation(fields: [adminUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// =============================================================================
+// CLIENTS
+// =============================================================================
+
+model Client {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  businessName   String       @db.VarChar(150)
+  contactPerson  String?      @db.VarChar(120)
+  phone          String?      @db.VarChar(20)
+  email          String?      @db.VarChar(191)
+  website        String?      @db.VarChar(255)
+  industry       String?      @db.VarChar(100)
+  location       String?      @db.VarChar(150)
+  status         ClientStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  contacts      ClientContact[]
+  notes         ClientNote[]
+  activity      ClientActivity[]
+  services      ClientService[]
+  renewals      Renewal[]
+  reminderRules ReminderRule[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("clients")
+}
+
+model ClientContact {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  name      String   @db.VarChar(120)
+  role      String?  @db.VarChar(80)
+  phone     String?  @db.VarChar(20)
+  email     String?  @db.VarChar(191)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@index([clientId])
+  @@map("client_contacts")
+}
+
+model ClientNote {
+  id            Int      @id @default(autoincrement())
+  clientId      Int
+  authorAdminId Int?
+  body          String   @db.Text
+  createdAt     DateTime @default(now())
+
+  client       Client     @relation(fields: [clientId], references: [id])
+  authorAdmin  AdminUser? @relation(fields: [authorAdminId], references: [id])
+
+  @@index([clientId])
+  @@map("client_notes")
+}
+
+// The chronological timeline from spec §7/§20. eventType is a free string
+// (payment.received, task.completed, service.added, billing.amount_changed,
+// reminder.sent, ...) rather than a giant enum — same pattern as the
+// digital-products-bundle sibling project's *Event tables.
+model ClientActivity {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  eventType String   @db.VarChar(60)
+  summary   String   @db.VarChar(255)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@index([clientId])
+  @@map("client_activity")
+}
+
+// =============================================================================
+// SERVICES & WORK — templates are reusable/editable (spec §17); task
+// instances are generated per period and historical ones are never mutated
+// (spec §18).
+// =============================================================================
+
+model ServiceTemplate {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  name           String   @db.VarChar(120)
+  description    String?  @db.VarChar(500)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  tasks          ServiceTemplateTask[]
+  clientServices ClientService[]
+
+  @@index([organizationId])
+  @@map("service_templates")
+}
+
+model ServiceTemplateTask {
+  id                Int            @id @default(autoincrement())
+  serviceTemplateId Int
+  title             String         @db.VarChar(150)
+  recurrence        RecurrenceType @default(MONTHLY)
+  sortOrder         Int            @default(0)
+  isActive          Boolean        @default(true)
+
+  serviceTemplate ServiceTemplate @relation(fields: [serviceTemplateId], references: [id])
+
+  taskInstances TaskInstance[]
+
+  @@index([serviceTemplateId])
+  @@map("service_template_tasks")
+}
+
+// A client's subscription to a service. Billing is modeled per
+// ClientService (not per Client) so a client with multiple services can
+// have different fees/billing days per service, per spec §8's example.
+model ClientService {
+  id                Int           @id @default(autoincrement())
+  clientId          Int
+  serviceTemplateId Int
+  feeInPaise        Int
+  startDate         DateTime
+  status            ServiceStatus @default(ACTIVE)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  client          Client          @relation(fields: [clientId], references: [id])
+  serviceTemplate ServiceTemplate @relation(fields: [serviceTemplateId], references: [id])
+
+  billingPlan   BillingPlan?
+  taskInstances TaskInstance[]
+  reminderRules ReminderRule[]
+
+  @@index([clientId])
+  @@index([serviceTemplateId])
+  @@map("client_services")
+}
+
+// Generated per period from ServiceTemplateTask; a completed September
+// task is never edited when October's set is generated (spec §18).
+model TaskInstance {
+  id                    Int        @id @default(autoincrement())
+  clientServiceId       Int
+  serviceTemplateTaskId Int?
+  title                 String     @db.VarChar(150)
+  periodLabel           String     @db.VarChar(7) // "2026-09"
+  dueDate               DateTime?
+  status                TaskStatus @default(PENDING)
+  completedAt           DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  clientService       ClientService        @relation(fields: [clientServiceId], references: [id])
+  serviceTemplateTask ServiceTemplateTask? @relation(fields: [serviceTemplateTaskId], references: [id])
+
+  @@unique([clientServiceId, serviceTemplateTaskId, periodLabel])
+  @@index([clientServiceId])
+  @@index([status])
+  @@map("task_instances")
+}
+
+// =============================================================================
+// BILLING — proper period architecture (spec §8), not a single
+// "next payment date" field. Historical periods/payments are never rewritten
+// (spec §11/§36) — a fee change creates a new billing state going forward.
+// =============================================================================
+
+model BillingPlan {
+  id              Int              @id @default(autoincrement())
+  clientServiceId Int              @unique
+  amountInPaise   Int
+  currency        String           @default("INR") @db.VarChar(3)
+  frequency       BillingFrequency @default(MONTHLY)
+  billingDay      Int // day of month, 1-28
+  startDate       DateTime
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  clientService ClientService @relation(fields: [clientServiceId], references: [id])
+
+  billingPeriods BillingPeriod[]
+
+  @@map("billing_plans")
+}
+
+model BillingPeriod {
+  id            Int                 @id @default(autoincrement())
+  billingPlanId Int
+  periodLabel   String              @db.VarChar(7) // "2026-09"
+  amountInPaise Int
+  dueDate       DateTime
+  status        BillingPeriodStatus @default(UPCOMING)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  billingPlan BillingPlan @relation(fields: [billingPlanId], references: [id])
+
+  payments     Payment[]
+  reminderJobs ReminderJob[]
+
+  @@unique([billingPlanId, periodLabel])
+  @@index([status])
+  @@index([dueDate])
+  @@map("billing_periods")
+}
+
+// One row per Razorpay payment attempt on a period (a failed attempt
+// followed by a successful retry is two rows). Never overwritten.
+model Payment {
+  id                Int           @id @default(autoincrement())
+  billingPeriodId   Int
+  razorpayOrderId   String?       @db.VarChar(60)
+  razorpayPaymentId String?       @unique @db.VarChar(60)
+  razorpaySignature String?       @db.VarChar(255)
+  status            PaymentStatus @default(CREATED)
+  amountInPaise     Int
+  method            String?       @db.VarChar(30)
+  failureReason     String?       @db.VarChar(255)
+  capturedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  billingPeriod BillingPeriod @relation(fields: [billingPeriodId], references: [id])
+
+  refunds Refund[]
+
+  @@index([billingPeriodId])
+  @@map("payments")
+}
+
+model Refund {
+  id                 Int          @id @default(autoincrement())
+  paymentId          Int
+  razorpayRefundId   String?      @unique @db.VarChar(60)
+  amountInPaise      Int
+  reason             String?      @db.VarChar(255)
+  status             RefundStatus @default(REQUESTED)
+  initiatedByAdminId Int?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  payment          Payment    @relation(fields: [paymentId], references: [id])
+  initiatedByAdmin AdminUser? @relation(fields: [initiatedByAdminId], references: [id])
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+// Idempotency ledger (spec §10). A webhook is only ever processed once no
+// matter how many times Razorpay (or a replay) delivers it.
+model WebhookEvent {
+  id              Int       @id @default(autoincrement())
+  organizationId  Int
+  razorpayEventId String    @unique @db.VarChar(60)
+  eventType       String    @db.VarChar(60)
+  payload         Json
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  processingError String?   @db.VarChar(500)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("webhook_events")
+}
+
+// =============================================================================
+// RENEWALS (spec §19)
+// =============================================================================
+
+model Renewal {
+  id                    Int           @id @default(autoincrement())
+  clientId              Int
+  contractStart         DateTime
+  contractDurationMonths Int?
+  renewalDate           DateTime
+  status                RenewalStatus @default(ACTIVE)
+  notes                 String?       @db.VarChar(500)
+  createdAt             DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  reminderJobs ReminderJob[]
+
+  @@index([clientId])
+  @@index([renewalDate])
+  @@map("renewals")
+}
+
+// =============================================================================
+// REMINDERS (spec §12/§13/§15) — OFF by default. A rule only ever fires if
+// BOTH this rule is enabled AND OrganizationSettings.automaticClientCommunicationEnabled
+// is true; APPROVAL_REQUIRED mode additionally needs an explicit admin click.
+// =============================================================================
+
+model ReminderRule {
+  id              Int              @id @default(autoincrement())
+  organizationId  Int
+  clientId        Int?             // null = org-wide default rule
+  clientServiceId Int?             // null = applies to all of the client's services
+  trigger         ReminderTrigger
+  offsetDays      Int
+  channel         ReminderChannel
+  mode            ReminderMode     @default(APPROVAL_REQUIRED)
+  isEnabled       Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  client        Client?        @relation(fields: [clientId], references: [id])
+  clientService ClientService? @relation(fields: [clientServiceId], references: [id])
+
+  jobs ReminderJob[]
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@map("reminder_rules")
+}
+
+// A scheduled instance of a rule, generated against one billing period or
+// one renewal (exactly one of the two is set).
+model ReminderJob {
+  id               Int               @id @default(autoincrement())
+  reminderRuleId   Int
+  billingPeriodId  Int?
+  renewalId        Int?
+  scheduledFor     DateTime
+  channel          ReminderChannel
+  status           ReminderJobStatus @default(SCHEDULED)
+  approvedByAdminId Int?
+  sentAt           DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  reminderRule  ReminderRule   @relation(fields: [reminderRuleId], references: [id])
+  billingPeriod BillingPeriod? @relation(fields: [billingPeriodId], references: [id])
+  renewal       Renewal?       @relation(fields: [renewalId], references: [id])
+  approvedBy    AdminUser?     @relation(fields: [approvedByAdminId], references: [id])
+
+  notifications NotificationLog[]
+
+  @@index([reminderRuleId])
+  @@index([status])
+  @@map("reminder_jobs")
+}
+
+// What was actually sent — audit trail + duplicate-send prevention. Empty
+// unless a channel is wired AND the global switch is on.
+model NotificationLog {
+  id                Int                 @id @default(autoincrement())
+  reminderJobId     Int
+  channel           ReminderChannel
+  recipient         String              @db.VarChar(191)
+  status            NotificationStatus
+  providerMessageId String?             @db.VarChar(191)
+  errorMessage      String?             @db.VarChar(500)
+  sentAt            DateTime?
+  createdAt         DateTime            @default(now())
+
+  reminderJob ReminderJob @relation(fields: [reminderJobId], references: [id])
+
+  @@index([reminderJobId])
+  @@map("notification_logs")
+}
