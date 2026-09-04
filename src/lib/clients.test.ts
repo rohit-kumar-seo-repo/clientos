@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "@/lib/db";
 import { resetDb } from "@/lib/test-db";
-import { listClients } from "@/lib/clients";
+import { listClients, getClientById } from "@/lib/clients";
 
 describe("listClients", () => {
   let orgId: number;
@@ -45,5 +45,45 @@ describe("listClients", () => {
     const result = await listClients(orgId);
 
     expect(result.map((c) => c.businessName)).not.toContain("Should Not Appear");
+  });
+});
+
+describe("getClientById", () => {
+  let orgId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+  });
+
+  it("returns the client with contacts, notes, and activity", async () => {
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors" },
+    });
+    await prisma.clientActivity.create({
+      data: { clientId: client.id, eventType: "client.created", summary: "Created." },
+    });
+
+    const result = await getClientById(orgId, client.id);
+
+    expect(result?.businessName).toBe("ABC Interiors");
+    expect(result?.activity).toHaveLength(1);
+  });
+
+  it("returns null for a client in a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const client = await prisma.client.create({
+      data: { organizationId: otherOrg.id, businessName: "Not Mine" },
+    });
+
+    const result = await getClientById(orgId, client.id);
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null for a nonexistent id", async () => {
+    const result = await getClientById(orgId, 999999);
+    expect(result).toBeNull();
   });
 });

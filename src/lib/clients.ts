@@ -16,3 +16,15 @@ export async function listClients(
     orderBy: { businessName: "asc" },
   });
 }
+
+export async function getClientById(organizationId: number, clientId: number) {
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId },
+    include: {
+      contacts: { orderBy: { isPrimary: "desc" } },
+      notes: { orderBy: { createdAt: "desc" } },
+      activity: { orderBy: { createdAt: "desc" } },
+    },
+  });
+  return client;
+}
