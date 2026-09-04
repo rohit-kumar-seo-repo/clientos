@@ -65,6 +65,19 @@ enum RefundStatus {
   FAILED
 }
 
+// The collection instrument layered on top of BillingPeriod (the
+// obligation). A BillingPeriod's own status stays date-driven; Invoice
+// status is payment-driven and cascades down to its line items' periods
+// once fully paid — see spec doc "Invoicing" section.
+enum InvoiceStatus {
+  DUE
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
 enum TaskStatus {
   PENDING
   COMPLETED
@@ -132,13 +145,13 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  settings      OrganizationSettings?
-  adminUsers    AdminUser[]
-  clients       Client[]
+  settings         OrganizationSettings?
+  adminUsers       AdminUser[]
+  clients          Client[]
   serviceTemplates ServiceTemplate[]
-  webhookEvents WebhookEvent[]
-  reminderRules ReminderRule[]
-  auditLogs     AuditLog[]
+  webhookEvents    WebhookEvent[]
+  reminderRules    ReminderRule[]
+  auditLogs        AuditLog[]
 
   @@map("organizations")
 }
@@ -146,11 +159,11 @@ model Organization {
 // The global safety switch from spec §14. Enforced server-side in the one
 // code path allowed to call an email/WhatsApp provider — never a UI-only flag.
 model OrganizationSettings {
-  id                                     Int      @id @default(autoincrement())
-  organizationId                         Int      @unique
-  automaticClientCommunicationEnabled    Boolean  @default(false)
-  createdAt                              DateTime @default(now())
-  updatedAt                              DateTime @updatedAt
+  id                                  Int      @id @default(autoincrement())
+  organizationId                      Int      @unique
+  automaticClientCommunicationEnabled Boolean  @default(false)
+  createdAt                           DateTime @default(now())
+  updatedAt                           DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
@@ -240,6 +253,7 @@ model Client {
   notes         ClientNote[]
   activity      ClientActivity[]
   services      ClientService[]
+  invoices      Invoice[]
   renewals      Renewal[]
   reminderRules ReminderRule[]
 
@@ -271,8 +285,8 @@ model ClientNote {
   body          String   @db.Text
   createdAt     DateTime @default(now())
 
-  client       Client     @relation(fields: [clientId], references: [id])
-  authorAdmin  AdminUser? @relation(fields: [authorAdminId], references: [id])
+  client      Client     @relation(fields: [clientId], references: [id])
+  authorAdmin AdminUser? @relation(fields: [authorAdminId], references: [id])
 
   @@index([clientId])
   @@map("client_notes")
@@ -421,8 +435,12 @@ model BillingPeriod {
 
   billingPlan BillingPlan @relation(fields: [billingPlanId], references: [id])
 
-  payments     Payment[]
-  reminderJobs ReminderJob[]
+  // A period is billed via AT MOST one invoice line item (unique FK on the
+  // other side) — this is what makes double-billing structurally
+  // impossible rather than just policy. No direct Payment relation here:
+  // payments are recorded against the Invoice, never the period directly.
+  invoiceLineItem InvoiceLineItem?
+  reminderJobs    ReminderJob[]
 
   @@unique([billingPlanId, periodLabel])
   @@index([status])
@@ -430,11 +448,62 @@ model BillingPeriod {
   @@map("billing_periods")
 }
 
-// One row per Razorpay payment attempt on a period (a failed attempt
-// followed by a successful retry is two rows). Never overwritten.
+// INVOICE — the collection instrument. A BillingPeriod is the immutable,
+// per-service *obligation* (never rewritten); an Invoice is what was
+// actually presented for payment and can bundle one period (the default —
+// auto-created when a period becomes due) or several periods across
+// services for the same client (an explicit "combine into one invoice"
+// admin action). totalAmountInPaise is a snapshot of its line items at
+// creation time, not recomputed live, so an invoice's own history never
+// silently changes.
+model Invoice {
+  id                 Int           @id @default(autoincrement())
+  clientId           Int
+  invoiceNumber      String        @unique @db.VarChar(20) // e.g. "INV-8F3K2Q" — the only reference ever shown to the client
+  totalAmountInPaise Int
+  currency           String        @default("INR") @db.VarChar(3)
+  status             InvoiceStatus @default(DUE)
+  dueDate            DateTime
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  @@index([clientId])
+  @@index([status])
+  @@map("invoices")
+}
+
+// One row per BillingPeriod folded into an Invoice. billingPeriodId is
+// @unique — a given period can belong to at most one invoice, which is
+// what makes "never duplicate financial records when combining invoices"
+// a schema-level guarantee, not just a policy. amountInPaise is snapshotted
+// from the period at invoicing time (should always equal the period's own
+// amount in V1 — no partial-period line items yet).
+model InvoiceLineItem {
+  id              Int      @id @default(autoincrement())
+  invoiceId       Int
+  billingPeriodId Int      @unique
+  amountInPaise   Int
+  createdAt       DateTime @default(now())
+
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  billingPeriod BillingPeriod @relation(fields: [billingPeriodId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_line_items")
+}
+
+// One row per Razorpay payment attempt on an INVOICE (a failed attempt
+// followed by a successful retry is two rows). Never overwritten. Moved
+// off BillingPeriod so one Razorpay payment can settle a combined invoice
+// spanning multiple services/periods at once.
 model Payment {
   id                Int           @id @default(autoincrement())
-  billingPeriodId   Int
+  invoiceId         Int
   razorpayOrderId   String?       @db.VarChar(60)
   razorpayPaymentId String?       @unique @db.VarChar(60)
   razorpaySignature String?       @db.VarChar(255)
@@ -446,11 +515,11 @@ model Payment {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  billingPeriod BillingPeriod @relation(fields: [billingPeriodId], references: [id])
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
 
   refunds Refund[]
 
-  @@index([billingPeriodId])
+  @@index([invoiceId])
   @@map("payments")
 }
 
@@ -494,14 +563,14 @@ model WebhookEvent {
 // =============================================================================
 
 model Renewal {
-  id                    Int           @id @default(autoincrement())
-  clientId              Int
-  contractStart         DateTime
+  id                     Int           @id @default(autoincrement())
+  clientId               Int
+  contractStart          DateTime
   contractDurationMonths Int?
-  renewalDate           DateTime
-  status                RenewalStatus @default(ACTIVE)
-  notes                 String?       @db.VarChar(500)
-  createdAt             DateTime      @default(now())
+  renewalDate            DateTime
+  status                 RenewalStatus @default(ACTIVE)
+  notes                  String?       @db.VarChar(500)
+  createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
   client Client @relation(fields: [clientId], references: [id])
@@ -520,17 +589,17 @@ model Renewal {
 // =============================================================================
 
 model ReminderRule {
-  id              Int              @id @default(autoincrement())
+  id              Int             @id @default(autoincrement())
   organizationId  Int
-  clientId        Int?             // null = org-wide default rule
-  clientServiceId Int?             // null = applies to all of the client's services
+  clientId        Int? // null = org-wide default rule
+  clientServiceId Int? // null = applies to all of the client's services
   trigger         ReminderTrigger
   offsetDays      Int
   channel         ReminderChannel
-  mode            ReminderMode     @default(APPROVAL_REQUIRED)
-  isEnabled       Boolean          @default(false)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  mode            ReminderMode    @default(APPROVAL_REQUIRED)
+  isEnabled       Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   organization  Organization   @relation(fields: [organizationId], references: [id])
   client        Client?        @relation(fields: [clientId], references: [id])
@@ -546,17 +615,17 @@ model ReminderRule {
 // A scheduled instance of a rule, generated against one billing period or
 // one renewal (exactly one of the two is set).
 model ReminderJob {
-  id               Int               @id @default(autoincrement())
-  reminderRuleId   Int
-  billingPeriodId  Int?
-  renewalId        Int?
-  scheduledFor     DateTime
-  channel          ReminderChannel
-  status           ReminderJobStatus @default(SCHEDULED)
+  id                Int               @id @default(autoincrement())
+  reminderRuleId    Int
+  billingPeriodId   Int?
+  renewalId         Int?
+  scheduledFor      DateTime
+  channel           ReminderChannel
+  status            ReminderJobStatus @default(SCHEDULED)
   approvedByAdminId Int?
-  sentAt           DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  sentAt            DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   reminderRule  ReminderRule   @relation(fields: [reminderRuleId], references: [id])
   billingPeriod BillingPeriod? @relation(fields: [billingPeriodId], references: [id])
@@ -573,15 +642,15 @@ model ReminderJob {
 // What was actually sent — audit trail + duplicate-send prevention. Empty
 // unless a channel is wired AND the global switch is on.
 model NotificationLog {
-  id                Int                 @id @default(autoincrement())
+  id                Int                @id @default(autoincrement())
   reminderJobId     Int
   channel           ReminderChannel
-  recipient         String              @db.VarChar(191)
+  recipient         String             @db.VarChar(191)
   status            NotificationStatus
-  providerMessageId String?             @db.VarChar(191)
-  errorMessage      String?             @db.VarChar(500)
+  providerMessageId String?            @db.VarChar(191)
+  errorMessage      String?            @db.VarChar(500)
   sentAt            DateTime?
-  createdAt         DateTime            @default(now())
+  createdAt         DateTime           @default(now())
 
   reminderJob ReminderJob @relation(fields: [reminderJobId], references: [id])
 
