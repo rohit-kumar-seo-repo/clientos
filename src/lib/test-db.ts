@@ -31,14 +31,22 @@ const TABLES = [
 ];
 
 /**
- * Truncates every application table. Call in `beforeEach` for any test
- * that touches the database, so tests never depend on leftover state from
- * a previous test or a previous run.
+ * Truncates every application table and resets AUTO_INCREMENT counters.
+ * Executes within a transaction to ensure all statements run on the same
+ * database connection — critical because the Prisma adapter uses a connection
+ * pool (connectionLimit: 5), and session variables like FOREIGN_KEY_CHECKS
+ * are per-connection. Without a transaction, multiple TRUNCATE calls could
+ * land on different connections and see different FK check settings.
+ *
+ * Call in `beforeEach` for any test that touches the database, so tests never
+ * depend on leftover state from a previous test or a previous run.
  */
 export async function resetDb(): Promise<void> {
-  await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 0");
-  for (const table of TABLES) {
-    await prisma.$executeRawUnsafe(`DELETE FROM \`${table}\``);
-  }
-  await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 1");
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 0");
+    for (const table of TABLES) {
+      await tx.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``);
+    }
+    await tx.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 1");
+  });
 }
