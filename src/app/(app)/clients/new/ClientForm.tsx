@@ -4,12 +4,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClientAction } from "../actions";
 
-export function ClientForm({ organizationId }: { organizationId: number }) {
+export function ClientForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(formData: FormData) {
-    const result = await createClientAction(organizationId, formData);
+    const result = await createClientAction(formData);
     if ("error" in result) {
       setError(result.error);
       return;

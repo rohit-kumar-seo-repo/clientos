@@ -1,11 +1,13 @@
 "use server";
 
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/require-admin";
 
 export async function createClientAction(
-  organizationId: number,
   formData: FormData
 ): Promise<{ error: string } | { clientId: number }> {
+  const admin = await requireAdmin();
+
   const businessName = String(formData.get("businessName") ?? "").trim();
   if (!businessName) {
     return { error: "Business name is required." };
@@ -20,7 +22,7 @@ export async function createClientAction(
 
   const client = await prisma.client.create({
     data: {
-      organizationId,
+      organizationId: admin.organizationId,
       businessName,
       contactPerson,
       phone,
