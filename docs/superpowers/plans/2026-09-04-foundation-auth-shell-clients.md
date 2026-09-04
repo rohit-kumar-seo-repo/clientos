@@ -1356,24 +1356,46 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `prisma`, `requireAdmin()`.
-- Produces: `createClientAction(organizationId: number, formData: FormData): Promise<{ error: string } | { clientId: number }>` — Task 9 links to `/clients/${clientId}` after a successful create; Task 10 (edit) and Task 12/13 (notes/contacts) follow the same `{ error } | { ok: true }`-shaped return convention established here.
+- Produces: `createClientAction(formData: FormData): Promise<{ error: string } | { clientId: number }>` — no `organizationId` parameter; the action derives it from `requireAdmin()` internally (see the security note below). Task 9 links to `/clients/${clientId}` after a successful create; Task 10 (edit) and Task 11/12 (contacts/notes) follow the same `{ error } | { ok: true }`-shaped return convention and the same `requireAdmin()`-inside-the-action pattern established here.
+
+**Security note (binding on this task):** `actions.ts` gets `"use server"` at the top, which makes every exported function independently network-invocable as a Server Action, regardless of which UI component calls it. `createClientAction` must never accept `organizationId` as a caller-supplied parameter — call `requireAdmin()` as the action's first line and use `admin.organizationId` from that. Every action added to this file in later tasks (10, 11, 12) follows the same rule: derive identity/ownership from `requireAdmin()` inside the action itself, never trust a parameter for it.
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
 // src/app/(app)/clients/actions.test.ts
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { resetDb } from "@/lib/test-db";
+
+vi.mock("@/lib/require-admin", () => ({
+  requireAdmin: vi.fn(),
+}));
+
+import { requireAdmin } from "@/lib/require-admin";
 import { createClientAction } from "@/app/(app)/clients/actions";
+
+// Shared by every describe block in this file (Tasks 8, 10, 11, 12) — sets
+// what requireAdmin() resolves to for the next call. adminId defaults to 1
+// since most tests don't care about the exact admin id, only the org;
+// Task 12 passes a real AdminUser id where the FK actually matters.
+function mockAdmin(organizationId: number, adminId = 1) {
+  vi.mocked(requireAdmin).mockResolvedValue({
+    id: adminId,
+    email: "admin@example.com",
+    organizationId,
+  });
+}
 
 describe("createClientAction", () => {
   let orgId: number;
 
   beforeEach(async () => {
     await resetDb();
+    vi.clearAllMocks();
     const org = await prisma.organization.create({ data: { name: "Test Org" } });
     orgId = org.id;
+    mockAdmin(orgId);
   });
 
   it("creates a client and returns its id", async () => {
@@ -1382,7 +1404,7 @@ describe("createClientAction", () => {
     form.set("contactPerson", "Rohit Sharma");
     form.set("email", "rohit@abcinteriors.in");
 
-    const result = await createClientAction(orgId, form);
+    const result = await createClientAction(form);
 
     expect("clientId" in result).toBe(true);
     const client = await prisma.client.findUnique({
@@ -1396,7 +1418,7 @@ describe("createClientAction", () => {
     const form = new FormData();
     form.set("businessName", "ABC Interiors");
 
-    const result = await createClientAction(orgId, form);
+    const result = await createClientAction(form);
     const clientId = (result as { clientId: number }).clientId;
 
     const activity = await prisma.clientActivity.findFirst({ where: { clientId } });
@@ -1407,9 +1429,26 @@ describe("createClientAction", () => {
     const form = new FormData();
     form.set("businessName", "  ");
 
-    const result = await createClientAction(orgId, form);
+    const result = await createClientAction(form);
 
     expect(result).toEqual({ error: "Business name is required." });
+  });
+
+  it("derives organizationId from requireAdmin(), never from a caller-supplied value", async () => {
+    // Regression guard for the security note above: proves the created
+    // client's org tracks whatever requireAdmin() resolves to — there is
+    // no other channel left for organizationId to come from.
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org" } });
+    mockAdmin(otherOrg.id);
+
+    const form = new FormData();
+    form.set("businessName", "Org-Scoped Client");
+
+    const result = await createClientAction(form);
+    const clientId = (result as { clientId: number }).clientId;
+
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    expect(client.organizationId).toBe(otherOrg.id);
   });
 });
 ```
@@ -1425,11 +1464,13 @@ Expected: FAIL — `Cannot find module '@/app/(app)/clients/actions'`.
 "use server";
 
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/require-admin";
 
 export async function createClientAction(
-  organizationId: number,
   formData: FormData
 ): Promise<{ error: string } | { clientId: number }> {
+  const admin = await requireAdmin();
+
   const businessName = String(formData.get("businessName") ?? "").trim();
   if (!businessName) {
     return { error: "Business name is required." };
@@ -1444,7 +1485,7 @@ export async function createClientAction(
 
   const client = await prisma.client.create({
     data: {
-      organizationId,
+      organizationId: admin.organizationId,
       businessName,
       contactPerson,
       phone,
@@ -1475,11 +1516,11 @@ function optionalString(formData: FormData, key: string): string | null {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- clients/actions.test`
-Expected: `3 passed`.
+Expected: `4 passed`.
 
 - [ ] **Step 5: Build the create-client page**
 
-`requireAdmin()` uses `next/headers`, which only works in a Server Component/Action — so the page itself is a Server Component that fetches `organizationId` and hands it down as a prop to a `"use client"` form component (same split used again in Task 10).
+`requireAdmin()` uses `next/headers`, which only works in a Server Component/Action — so the page itself is a Server Component that calls it (as a render gate — see the security note below for why the action also calls it independently) and renders a `"use client"` form component (same split used again in Task 10).
 
 ```tsx
 // src/app/(app)/clients/new/page.tsx
@@ -1487,10 +1528,12 @@ import { requireAdmin } from "@/lib/require-admin";
 import { ClientForm } from "./ClientForm";
 
 export default async function NewClientPage() {
-  const admin = await requireAdmin();
-  return <ClientForm organizationId={admin.organizationId} />;
+  await requireAdmin();
+  return <ClientForm />;
 }
 ```
+
+**Security note (binding on this task):** do NOT pass `organizationId` from this page down to `ClientForm` as a prop, and do NOT have `createClientAction` accept it as a parameter. `actions.ts` has `"use server"` at the top, making every export independently network-invocable regardless of which UI calls it — a caller-supplied `organizationId` would let anyone invoking the action directly write into an organization they don't belong to. `createClientAction` must call `requireAdmin()` itself, internally, as its first line, and use `admin.organizationId` from that — this page's own `requireAdmin()` call is only the UI-level render gate, not the security boundary. (`ClientForm` therefore takes no props at all — it calls `createClientAction(formData)` with no `organizationId` argument.)
 
 ```tsx
 // src/app/(app)/clients/new/ClientForm.tsx
@@ -1500,12 +1543,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClientAction } from "../actions";
 
-export function ClientForm({ organizationId }: { organizationId: number }) {
+export function ClientForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(formData: FormData) {
-    const result = await createClientAction(organizationId, formData);
+    const result = await createClientAction(formData);
     if ("error" in result) {
       setError(result.error);
       return;
@@ -1782,8 +1825,10 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `src/app/(app)/clients/[id]/page.tsx` (add an "Edit" link)
 
 **Interfaces:**
-- Consumes: `getClientById`, the `{ error } | { ok: true }` convention from Task 8.
-- Produces: `updateClientAction(organizationId: number, clientId: number, formData: FormData): Promise<{ error: string } | { ok: true }>`, writes `client.updated` activity listing which fields changed.
+- Consumes: `getClientById`, the `{ error } | { ok: true }` convention from Task 8, the `requireAdmin()`-inside-the-action pattern and the `mockAdmin(organizationId, adminId?)` test helper established by Task 8's security fix (commit `0ba4f36` — see `src/app/(app)/clients/actions.test.ts`'s top-of-file `vi.mock("@/lib/require-admin", ...)`).
+- Produces: `updateClientAction(clientId: number, formData: FormData): Promise<{ error: string } | { ok: true }>` — no `organizationId` parameter; the action derives it from `requireAdmin()` internally, exactly like `createClientAction`. Writes `client.updated` activity listing which fields changed.
+
+**Security note (binding on this task):** `actions.ts` has `"use server"` at the top, so every export is independently network-invocable. `updateClientAction` must never accept `organizationId` (or any other identity/ownership claim) as a caller-supplied parameter — derive it from `requireAdmin()` inside the action, the same fix already applied to `createClientAction` in Task 8.
 
 - [ ] **Step 1: Add the failing test**
 
@@ -1797,12 +1842,14 @@ describe("updateClientAction", () => {
 
   beforeEach(async () => {
     await resetDb();
+    vi.clearAllMocks();
     const org = await prisma.organization.create({ data: { name: "Test Org" } });
     orgId = org.id;
     const client = await prisma.client.create({
       data: { organizationId: orgId, businessName: "ABC Interiors", phone: "111" },
     });
     clientId = client.id;
+    mockAdmin(orgId);
   });
 
   it("updates the client's fields", async () => {
@@ -1810,7 +1857,7 @@ describe("updateClientAction", () => {
     form.set("businessName", "ABC Interiors Pvt Ltd");
     form.set("phone", "222");
 
-    const result = await updateClientAction(orgId, clientId, form);
+    const result = await updateClientAction(clientId, form);
 
     expect(result).toEqual({ ok: true });
     const updated = await prisma.client.findUnique({ where: { id: clientId } });
@@ -1823,7 +1870,7 @@ describe("updateClientAction", () => {
     form.set("businessName", "ABC Interiors Pvt Ltd");
     form.set("phone", "111"); // unchanged
 
-    await updateClientAction(orgId, clientId, form);
+    await updateClientAction(clientId, form);
 
     const activity = await prisma.clientActivity.findFirst({
       where: { clientId, eventType: "client.updated" },
@@ -1836,19 +1883,22 @@ describe("updateClientAction", () => {
     const form = new FormData();
     form.set("businessName", "");
 
-    const result = await updateClientAction(orgId, clientId, form);
+    const result = await updateClientAction(clientId, form);
 
     expect(result).toEqual({ error: "Business name is required." });
   });
 
-  it("returns an error for a client outside the organization", async () => {
+  it("returns an error when the authenticated admin belongs to a different organization than the client", async () => {
     const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id); // simulates an admin from a different org attempting the edit
     const form = new FormData();
     form.set("businessName", "Hijacked");
 
-    const result = await updateClientAction(otherOrg.id, clientId, form);
+    const result = await updateClientAction(clientId, form);
 
     expect(result).toEqual({ error: "Client not found." });
+    const untouched = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(untouched?.businessName).toBe("ABC Interiors"); // confirms nothing was written
   });
 });
 ```
@@ -1873,12 +1923,13 @@ const EDITABLE_FIELDS = [
 ] as const;
 
 export async function updateClientAction(
-  organizationId: number,
   clientId: number,
   formData: FormData
 ): Promise<{ error: string } | { ok: true }> {
+  const admin = await requireAdmin();
+
   const existing = await prisma.client.findFirst({
-    where: { id: clientId, organizationId },
+    where: { id: clientId, organizationId: admin.organizationId },
   });
   if (!existing) {
     return { error: "Client not found." };
@@ -1918,7 +1969,7 @@ export async function updateClientAction(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- clients/actions.test`
-Expected: all pass (3 from Task 8 + 4 new = 7).
+Expected: all pass (4 from Task 8 + 4 new = 8).
 
 - [ ] **Step 5: Build the edit page (Server Component + client form, same split as Task 8)**
 
@@ -1939,7 +1990,7 @@ export default async function EditClientPage({
   const client = await getClientById(admin.organizationId, Number(id));
   if (!client) notFound();
 
-  return <EditClientForm organizationId={admin.organizationId} client={client} />;
+  return <EditClientForm client={client} />;
 }
 ```
 
@@ -1952,18 +2003,12 @@ import { useRouter } from "next/navigation";
 import type { Client } from "@/generated/prisma/client";
 import { updateClientAction } from "../../actions";
 
-export function EditClientForm({
-  organizationId,
-  client,
-}: {
-  organizationId: number;
-  client: Client;
-}) {
+export function EditClientForm({ client }: { client: Client }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(formData: FormData) {
-    const result = await updateClientAction(organizationId, client.id, formData);
+    const result = await updateClientAction(client.id, formData);
     if ("error" in result) {
       setError(result.error);
       return;
@@ -2065,8 +2110,10 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `src/app/(app)/clients/[id]/page.tsx` (render the panel)
 
 **Interfaces:**
-- Consumes: `getClientById`'s `contacts` array (already fetched in Task 9).
-- Produces: `addContactAction(clientId: number, formData: FormData): Promise<{ error: string } | { ok: true }>`, `removeContactAction(clientId: number, contactId: number): Promise<{ ok: true }>`.
+- Consumes: `getClientById`'s `contacts` array (already fetched in Task 9), the `requireAdmin()`-inside-the-action pattern and `mockAdmin()` test helper established by Task 8's security fix.
+- Produces: `addContactAction(clientId: number, formData: FormData): Promise<{ error: string } | { ok: true }>`, `removeContactAction(clientId: number, contactId: number): Promise<{ ok: true }>`. Signatures are unchanged from the original design (neither ever took `organizationId`), but both now internally call `requireAdmin()` and verify `clientId` belongs to that org before doing anything — see the security note below.
+
+**Security note (binding on this task):** the original version of this task had NO organization check at all in either action — any caller could add or remove a contact on any `clientId`, including one belonging to a different organization. Both actions must call `requireAdmin()` first and confirm the client is actually in that org (same `findFirst({ where: { id: clientId, organizationId } })` pattern Task 10 uses), returning `{ error: "Client not found." }` if not, before touching `ClientContact`.
 
 - [ ] **Step 1: Add the failing tests**
 
@@ -2075,15 +2122,19 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 import { addContactAction, removeContactAction } from "@/app/(app)/clients/actions";
 
 describe("addContactAction / removeContactAction", () => {
+  let orgId: number;
   let clientId: number;
 
   beforeEach(async () => {
     await resetDb();
+    vi.clearAllMocks();
     const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
     const client = await prisma.client.create({
       data: { organizationId: org.id, businessName: "ABC Interiors" },
     });
     clientId = client.id;
+    mockAdmin(orgId);
   });
 
   it("adds a contact and logs activity", async () => {
@@ -2121,6 +2172,31 @@ describe("addContactAction / removeContactAction", () => {
 
     expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).toBeNull();
   });
+
+  it("rejects adding a contact when the admin belongs to a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+    const form = new FormData();
+    form.set("name", "Should Not Be Added");
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({ error: "Client not found." });
+    expect(await prisma.clientContact.findFirst({ where: { clientId } })).toBeNull();
+  });
+
+  it("rejects removing a contact when the admin belongs to a different organization", async () => {
+    const contact = await prisma.clientContact.create({
+      data: { clientId, name: "Priya Mehta" },
+    });
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+
+    await removeContactAction(clientId, contact.id);
+
+    // still there — the cross-org removal must not have taken effect
+    expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).not.toBeNull();
+  });
 });
 ```
 
@@ -2133,10 +2209,23 @@ Expected: FAIL — `addContactAction is not a function`.
 
 ```typescript
 // add to src/app/(app)/clients/actions.ts
+async function requireClientInOwnOrg(clientId: number) {
+  const admin = await requireAdmin();
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: admin.organizationId },
+  });
+  return { admin, client };
+}
+
 export async function addContactAction(
   clientId: number,
   formData: FormData
 ): Promise<{ error: string } | { ok: true }> {
+  const { client } = await requireClientInOwnOrg(clientId);
+  if (!client) {
+    return { error: "Client not found." };
+  }
+
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {
     return { error: "Contact name is required." };
@@ -2167,15 +2256,25 @@ export async function removeContactAction(
   clientId: number,
   contactId: number
 ): Promise<{ ok: true }> {
+  const { client } = await requireClientInOwnOrg(clientId);
+  if (!client) {
+    // Silently no-op rather than error: matches the existing deleteMany's
+    // own "no-op on no match" semantics, and avoids leaking whether a
+    // clientId exists at all to a caller who isn't authorized for it.
+    return { ok: true };
+  }
+
   await prisma.clientContact.deleteMany({ where: { id: contactId, clientId } });
   return { ok: true };
 }
 ```
 
+Note: `requireClientInOwnOrg` is a small private helper shared by both actions in this task — introduced here rather than duplicating the `requireAdmin()` + ownership-lookup pair twice. Task 12's `addNoteAction` should reuse this same helper rather than re-implementing the check a third time.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- clients/actions.test`
-Expected: all pass (7 from Task 10 + 3 new = 10).
+Expected: all pass (8 from Task 10 + 5 new = 13).
 
 - [ ] **Step 5: Build `ContactsPanel`**
 
@@ -2288,8 +2387,25 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `src/app/(app)/clients/[id]/page.tsx` (render the panel)
 
 **Interfaces:**
-- Consumes: `getClientById`'s `notes` array (already fetched in Task 9), `requireAdmin()`'s `id` as `authorAdminId`.
-- Produces: `addNoteAction(clientId: number, authorAdminId: number, formData: FormData): Promise<{ error: string } | { ok: true }>`.
+- Consumes: `getClientById`'s `notes` array (already fetched in Task 9), the `requireAdmin()`-inside-the-action pattern, the `requireClientInOwnOrg(clientId)` helper introduced in Task 11, and the `mockAdmin()` test helper from Task 8.
+- Produces: `addNoteAction(clientId: number, formData: FormData): Promise<{ error: string } | { ok: true }>` — no `authorAdminId` parameter; the note's author is `requireAdmin()`'s own `id`, not a caller-supplied value (a caller-supplied `authorAdminId` would let anyone attribute a note to an arbitrary admin — an impersonation risk, same class of bug as the `organizationId` issue Task 8 fixed).
+
+**Security note (binding on this task):** the original version of this task took `authorAdminId` as a plain parameter — worse than Task 8's original bug, since it lets a caller impersonate a *different* admin as a note's author, not just write into the wrong organization. `addNoteAction` must derive both the acting admin's id AND the organization check from `requireAdmin()` + `requireClientInOwnOrg`, never from parameters.
+
+Extend the shared `mockAdmin` test helper (from Task 8) to optionally take a real admin id, so tests that need `ClientNote.authorAdminId` to reference an actual `AdminUser` row (a real foreign key) can supply one:
+
+```typescript
+// modify the existing helper in src/app/(app)/clients/actions.test.ts
+function mockAdmin(organizationId: number, adminId = 1) {
+  vi.mocked(requireAdmin).mockResolvedValue({
+    id: adminId,
+    email: "admin@example.com",
+    organizationId,
+  });
+}
+```
+
+(This is backward compatible — every existing call site that passes only `organizationId` keeps working unchanged, since `adminId` defaults to `1`.)
 
 - [ ] **Step 1: Add the failing test**
 
@@ -2298,12 +2414,15 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 import { addNoteAction } from "@/app/(app)/clients/actions";
 
 describe("addNoteAction", () => {
+  let orgId: number;
   let clientId: number;
   let adminId: number;
 
   beforeEach(async () => {
     await resetDb();
+    vi.clearAllMocks();
     const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
     const client = await prisma.client.create({
       data: { organizationId: org.id, businessName: "ABC Interiors" },
     });
@@ -2312,13 +2431,14 @@ describe("addNoteAction", () => {
       data: { organizationId: org.id, email: "rohit@example.com", passwordHash: "x" },
     });
     adminId = admin.id;
+    mockAdmin(orgId, adminId);
   });
 
   it("adds a note and logs activity", async () => {
     const form = new FormData();
     form.set("body", "Client wants to pause Google Ads for a month.");
 
-    const result = await addNoteAction(clientId, adminId, form);
+    const result = await addNoteAction(clientId, form);
 
     expect(result).toEqual({ ok: true });
     const note = await prisma.clientNote.findFirst({ where: { clientId } });
@@ -2334,9 +2454,24 @@ describe("addNoteAction", () => {
     const form = new FormData();
     form.set("body", "   ");
 
-    const result = await addNoteAction(clientId, adminId, form);
+    const result = await addNoteAction(clientId, form);
 
     expect(result).toEqual({ error: "Note cannot be empty." });
+  });
+
+  it("rejects adding a note when the admin belongs to a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const otherAdmin = await prisma.adminUser.create({
+      data: { organizationId: otherOrg.id, email: "other@example.com", passwordHash: "x" },
+    });
+    mockAdmin(otherOrg.id, otherAdmin.id);
+    const form = new FormData();
+    form.set("body", "Should not be added.");
+
+    const result = await addNoteAction(clientId, form);
+
+    expect(result).toEqual({ error: "Client not found." });
+    expect(await prisma.clientNote.findFirst({ where: { clientId } })).toBeNull();
   });
 });
 ```
@@ -2352,16 +2487,20 @@ Expected: FAIL — `addNoteAction is not a function`.
 // add to src/app/(app)/clients/actions.ts
 export async function addNoteAction(
   clientId: number,
-  authorAdminId: number,
   formData: FormData
 ): Promise<{ error: string } | { ok: true }> {
+  const { admin, client } = await requireClientInOwnOrg(clientId);
+  if (!client) {
+    return { error: "Client not found." };
+  }
+
   const body = String(formData.get("body") ?? "").trim();
   if (!body) {
     return { error: "Note cannot be empty." };
   }
 
   await prisma.clientNote.create({
-    data: { clientId, authorAdminId, body },
+    data: { clientId, authorAdminId: admin.id, body },
   });
 
   await prisma.clientActivity.create({
@@ -2379,7 +2518,7 @@ export async function addNoteAction(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- clients/actions.test`
-Expected: all pass (10 from Task 11 + 2 new = 12).
+Expected: all pass (13 from Task 11 + 3 new = 16).
 
 - [ ] **Step 5: Build `NotesPanel`**
 
@@ -2393,17 +2532,15 @@ import { addNoteAction } from "@/app/(app)/clients/actions";
 
 export function NotesPanel({
   clientId,
-  adminId,
   notes,
 }: {
   clientId: number;
-  adminId: number;
   notes: ClientNote[];
 }) {
   const [error, setError] = useState<string | null>(null);
 
   async function handleAdd(formData: FormData) {
-    const result = await addNoteAction(clientId, adminId, formData);
+    const result = await addNoteAction(clientId, formData);
     setError("error" in result ? result.error : null);
   }
 
@@ -2452,7 +2589,7 @@ In `src/app/(app)/clients/[id]/page.tsx`:
 import { NotesPanel } from "@/components/clients/NotesPanel";
 // ... below the ContactsPanel row:
 <div className="col-span-2">
-  <NotesPanel clientId={client.id} adminId={admin.id} notes={client.notes} />
+  <NotesPanel clientId={client.id} notes={client.notes} />
 </div>
 ```
 
