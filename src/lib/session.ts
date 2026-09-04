@@ -28,7 +28,9 @@ export async function validateSession(
     return null;
   }
 
-  await prisma.adminSession.update({
+  // Use updateMany to avoid TOCTOU race: if revokeSession deletes the row between
+  // the read and this write, updateMany silently updates 0 rows instead of throwing.
+  await prisma.adminSession.updateMany({
     where: { token },
     data: { lastSeenAt: new Date() },
   });

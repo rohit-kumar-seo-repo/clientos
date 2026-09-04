@@ -50,6 +50,21 @@ describe("createSession / validateSession", () => {
 
     expect(result).toBeNull();
   });
+
+  it("returns null for a deactivated admin", async () => {
+    const admin = await makeAdmin();
+    const { token } = await createSession(admin.id);
+
+    // Deactivate the admin
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { isActive: false },
+    });
+
+    const result = await validateSession(token);
+
+    expect(result).toBeNull();
+  });
 });
 
 describe("revokeSession", () => {
