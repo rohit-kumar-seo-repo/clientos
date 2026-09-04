@@ -46,22 +46,37 @@ export async function loginAction(
   // generic error as a wrong password — an attacker can't tell a locked
   // account apart from a wrong password or a nonexistent email.
   if (admin.lockedUntil && admin.lockedUntil > new Date()) {
+    // Timing side-channel mitigation, same reasoning as the "no such admin"
+    // branch above: without this, a locked-out account would respond
+    // immediately while the other two failure paths (unknown email, wrong
+    // password) both incur a bcrypt.compare(). Running the same dummy-hash
+    // comparison here keeps all three failure paths the same cost.
+    await verifyPassword(password, DUMMY_HASH);
     return { error: GENERIC_ERROR };
   }
 
   const valid = await verifyPassword(password, admin.passwordHash);
   if (!valid) {
-    const failedLoginAttempts = admin.failedLoginAttempts + 1;
-    await prisma.adminUser.update({
+    // Atomic increment (via Prisma's `increment` operator) rather than
+    // reading admin.failedLoginAttempts and writing back count+1: a plain
+    // read-modify-write is a lost-update race under concurrent requests —
+    // several parallel wrong-password attempts would each read the same
+    // starting count and each write the same count+1, letting an attacker
+    // who parallelizes guesses bypass the lockout entirely. The lockout
+    // decision below is based on `updated.failedLoginAttempts`, the actual
+    // post-increment count the database returns, not a stale in-memory value.
+    const updated = await prisma.adminUser.update({
       where: { id: admin.id },
-      data: {
-        failedLoginAttempts,
-        lockedUntil:
-          failedLoginAttempts >= MAX_FAILED_ATTEMPTS
-            ? new Date(Date.now() + LOCKOUT_DURATION_MS)
-            : admin.lockedUntil,
-      },
+      data: { failedLoginAttempts: { increment: 1 } },
     });
+
+    if (updated.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
+      await prisma.adminUser.update({
+        where: { id: admin.id },
+        data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+      });
+    }
+
     return { error: GENERIC_ERROR };
   }
 

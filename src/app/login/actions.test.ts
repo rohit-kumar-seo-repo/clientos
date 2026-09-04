@@ -133,4 +133,44 @@ describe("loginAction", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
+
+  it("runs a bcrypt comparison even when the account is locked out (timing side-channel mitigation)", async () => {
+    // Same reasoning as the unknown-email case above, applied to the
+    // lockout branch: without a dummy comparison here, a locked-out account
+    // would respond immediately while unknown-email/wrong-password both
+    // incur a bcrypt.compare(), letting an attacker distinguish "locked"
+    // from the other two failure cases by response time alone.
+    const admin = await makeAdmin();
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 5, lockedUntil: new Date(Date.now() + 60_000) },
+    });
+
+    const spy = vi.spyOn(authModule, "verifyPassword");
+
+    await loginAction(loginForm("rohit@example.com", "hunter2"));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("locks the account after concurrent failed attempts, even when requests race (atomic increment)", async () => {
+    // Regression test for a lost-update race: a naive read-then-increment
+    // (read admin.failedLoginAttempts, write count+1) lets several parallel
+    // wrong-password requests all read the same starting count and all
+    // write the same count+1, so the counter never reaches the lockout
+    // threshold no matter how many guesses an attacker fires in parallel.
+    // The fix uses Prisma's atomic `increment` operator, so this must land
+    // on exactly 5 and lock the account even when the 5 requests race.
+    const admin = await makeAdmin();
+
+    await Promise.all(
+      Array.from({ length: 5 }, () => loginAction(loginForm("rohit@example.com", "wrong")))
+    );
+
+    const updated = await prisma.adminUser.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(updated.failedLoginAttempts).toBe(5);
+    expect(updated.lockedUntil).not.toBeNull();
+    expect(updated.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+  });
 });
