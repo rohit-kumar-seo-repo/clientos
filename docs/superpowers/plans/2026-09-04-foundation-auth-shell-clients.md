@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Every DB-backed table already carries `organizationId` (multi-tenant-ready schema) — V1 code hardcodes single-organization lookup (`prisma.organization.findFirstOrThrow()`), no org-switcher UI.
+- Every DB-backed table already carries `organizationId` (multi-tenant-ready schema). No task queries `Organization` directly at request time — `organizationId` always comes from the authenticated admin's own session (`requireAdmin()` → `AdminUser.organizationId`, set once by the Task 3 seed script). No org-switcher UI in V1, but this keeps every query correctly scoped without a hardcoded lookup that would need changing when a second organization eventually exists.
 - Sessions are DB-backed opaque tokens (`AdminSession.token`, 64 hex chars from `crypto.randomBytes(32)`), never JWTs — a session must be revocable server-side (spec: Org/Auth).
 - No secrets in committed code. `ADMIN_SESSION_SECRET` in `.env` is reserved for a future CSRF/signing use, not needed by this plan's cookie-token approach (the token itself is the secret, same as `AdminSession` in the digital-products-bundle sibling project).
 - Every meaningful client mutation writes a `ClientActivity` row (`eventType` as a free string, e.g. `"client.created"`, `"client.updated"`, `"note.added"`, `"contact.added"`) — this is the audit trail the dashboard/detail page reads (spec §7/§20).
