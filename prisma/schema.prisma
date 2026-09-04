@@ -173,15 +173,21 @@ model OrganizationSettings {
 // Sessions are DB-backed opaque tokens (not stateless JWTs) so a session can
 // actually be revoked server-side.
 model AdminUser {
-  id             Int       @id @default(autoincrement())
-  organizationId Int
-  email          String    @unique @db.VarChar(191)
-  passwordHash   String    @db.VarChar(255)
-  name           String?   @db.VarChar(120)
-  isActive       Boolean   @default(true)
-  lastLoginAt    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                  Int       @id @default(autoincrement())
+  organizationId      Int
+  email               String    @unique @db.VarChar(191)
+  passwordHash        String    @db.VarChar(255)
+  name                String?   @db.VarChar(120)
+  isActive            Boolean   @default(true)
+  lastLoginAt         DateTime?
+  // Login rate-limiting: incremented on each failed attempt, reset to 0 on
+  // a successful login. lockedUntil is set once failedLoginAttempts crosses
+  // the threshold and checked (in addition to, not instead of, the
+  // password check) before any login is allowed to proceed.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id])
 

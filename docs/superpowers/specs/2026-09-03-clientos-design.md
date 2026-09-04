@@ -41,8 +41,11 @@ See `prisma/schema.prisma` (fully commented) for the authoritative field-level
 definitions. Summary by area:
 
 - **Org/Auth** — `Organization`, `OrganizationSettings` (the global
-  communication switch), `AdminUser`, `AdminSession` (DB-backed, revocable),
-  `AuditLog`.
+  communication switch), `AdminUser` (bcrypt password hash; `failedLoginAttempts`/
+  `lockedUntil` for login rate-limiting — 5 failures locks for 15 minutes),
+  `AdminSession` (DB-backed, revocable — deliberately not NextAuth/JWT, since
+  the Credentials-only case would force stateless sessions and give up
+  server-side revocation), `AuditLog`.
 - **Clients** — `Client`, `ClientContact`, `ClientNote`, `ClientActivity`
   (the timeline).
 - **Services & work** — `ServiceTemplate` + `ServiceTemplateTask` (editable,

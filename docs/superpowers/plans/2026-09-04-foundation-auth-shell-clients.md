@@ -512,18 +512,19 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: Login page, server action, and cookie handling
+## Task 4: Login page, server action, rate limiting, and cookie handling
 
 **Files:**
 - Create: `src/app/login/page.tsx`
+- Create: `src/app/login/LoginForm.tsx`
 - Create: `src/app/login/actions.ts`
 - Test: `src/app/login/actions.test.ts`
 
 **Interfaces:**
-- Consumes: `verifyPassword` (Task 2), `createSession` (Task 3), `prisma`.
-- Produces: `loginAction(formData: FormData): Promise<{ error: string } | never>` — on success, sets the `co_session` cookie and calls Next.js `redirect("/")`; on failure, returns `{ error: string }` for the form to display. Task 5's `requireAdmin()` reads the same `co_session` cookie name.
+- Consumes: `verifyPassword` (Task 2), `createSession` (Task 3), `prisma` (including `AdminUser.failedLoginAttempts`/`lockedUntil`, added to the schema specifically for this task).
+- Produces: `loginAction(formData: FormData): Promise<{ error: string } | never>` — on success, sets the `co_session` cookie and calls Next.js `redirect("/")`; on failure (including a locked-out account — same message either way, so a caller can't distinguish "wrong password" from "locked" from "no such user"), returns `{ error: string }` for the form to display. Task 5's `requireAdmin()` reads the same `co_session` cookie name.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```typescript
 // src/app/login/actions.test.ts
@@ -550,6 +551,22 @@ vi.mock("next/navigation", () => ({
 
 import { loginAction } from "@/app/login/actions";
 
+const GENERIC_ERROR = "Invalid email or password.";
+
+async function makeAdmin(email = "rohit@example.com", password = "hunter2") {
+  const org = await prisma.organization.create({ data: { name: "Test Org" } });
+  return prisma.adminUser.create({
+    data: { organizationId: org.id, email, passwordHash: await hashPassword(password) },
+  });
+}
+
+function loginForm(email: string, password: string) {
+  const form = new FormData();
+  form.set("email", email);
+  form.set("password", password);
+  return form;
+}
+
 describe("loginAction", () => {
   beforeEach(async () => {
     await resetDb();
@@ -558,20 +575,11 @@ describe("loginAction", () => {
   });
 
   it("sets a session cookie and redirects on correct credentials", async () => {
-    const org = await prisma.organization.create({ data: { name: "Test Org" } });
-    await prisma.adminUser.create({
-      data: {
-        organizationId: org.id,
-        email: "rohit@example.com",
-        passwordHash: await hashPassword("hunter2"),
-      },
-    });
+    await makeAdmin();
 
-    const form = new FormData();
-    form.set("email", "rohit@example.com");
-    form.set("password", "hunter2");
-
-    await expect(loginAction(form)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(loginAction(loginForm("rohit@example.com", "hunter2"))).rejects.toThrow(
+      "NEXT_REDIRECT"
+    );
 
     expect(cookieStore.get("co_session")).toBeTruthy();
     const session = await prisma.adminSession.findFirst();
@@ -579,33 +587,67 @@ describe("loginAction", () => {
   });
 
   it("returns an error and sets no cookie on wrong password", async () => {
-    const org = await prisma.organization.create({ data: { name: "Test Org" } });
-    await prisma.adminUser.create({
-      data: {
-        organizationId: org.id,
-        email: "rohit@example.com",
-        passwordHash: await hashPassword("hunter2"),
-      },
-    });
+    await makeAdmin();
 
-    const form = new FormData();
-    form.set("email", "rohit@example.com");
-    form.set("password", "wrong");
+    const result = await loginAction(loginForm("rohit@example.com", "wrong"));
 
-    const result = await loginAction(form);
-
-    expect(result).toEqual({ error: "Invalid email or password." });
+    expect(result).toEqual({ error: GENERIC_ERROR });
     expect(cookieStore.has("co_session")).toBe(false);
   });
 
   it("returns the same generic error for an unknown email (no user enumeration)", async () => {
-    const form = new FormData();
-    form.set("email", "nobody@example.com");
-    form.set("password", "hunter2");
+    const result = await loginAction(loginForm("nobody@example.com", "hunter2"));
+    expect(result).toEqual({ error: GENERIC_ERROR });
+  });
 
-    const result = await loginAction(form);
+  it("increments failedLoginAttempts on a wrong password", async () => {
+    const admin = await makeAdmin();
 
-    expect(result).toEqual({ error: "Invalid email or password." });
+    await loginAction(loginForm("rohit@example.com", "wrong"));
+
+    const updated = await prisma.adminUser.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(updated.failedLoginAttempts).toBe(1);
+  });
+
+  it("locks the account after 5 failed attempts, rejecting even the correct password", async () => {
+    await makeAdmin();
+
+    for (let i = 0; i < 5; i++) {
+      await loginAction(loginForm("rohit@example.com", "wrong"));
+    }
+
+    const result = await loginAction(loginForm("rohit@example.com", "hunter2"));
+
+    expect(result).toEqual({ error: GENERIC_ERROR });
+    expect(cookieStore.has("co_session")).toBe(false);
+  });
+
+  it("resets failedLoginAttempts and lockedUntil on a successful login", async () => {
+    const admin = await makeAdmin();
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 3 },
+    });
+
+    await expect(loginAction(loginForm("rohit@example.com", "hunter2"))).rejects.toThrow(
+      "NEXT_REDIRECT"
+    );
+
+    const updated = await prisma.adminUser.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(updated.failedLoginAttempts).toBe(0);
+    expect(updated.lockedUntil).toBeNull();
+  });
+
+  it("allows login again once lockedUntil has passed", async () => {
+    const admin = await makeAdmin();
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 5, lockedUntil: new Date(Date.now() - 1000) },
+    });
+
+    await expect(loginAction(loginForm("rohit@example.com", "hunter2"))).rejects.toThrow(
+      "NEXT_REDIRECT"
+    );
   });
 });
 ```
@@ -628,6 +670,8 @@ import { createSession } from "@/lib/session";
 
 const GENERIC_ERROR = "Invalid email or password.";
 const SESSION_COOKIE = "co_session";
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
 export async function loginAction(
   formData: FormData
@@ -644,8 +688,26 @@ export async function loginAction(
     return { error: GENERIC_ERROR };
   }
 
+  // Checked before the password comparison, and returns the exact same
+  // generic error as a wrong password — an attacker can't tell a locked
+  // account apart from a wrong password or a nonexistent email.
+  if (admin.lockedUntil && admin.lockedUntil > new Date()) {
+    return { error: GENERIC_ERROR };
+  }
+
   const valid = await verifyPassword(password, admin.passwordHash);
   if (!valid) {
+    const failedLoginAttempts = admin.failedLoginAttempts + 1;
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: {
+        failedLoginAttempts,
+        lockedUntil:
+          failedLoginAttempts >= MAX_FAILED_ATTEMPTS
+            ? new Date(Date.now() + LOCKOUT_DURATION_MS)
+            : admin.lockedUntil,
+      },
+    });
     return { error: GENERIC_ERROR };
   }
 
@@ -662,7 +724,7 @@ export async function loginAction(
 
   await prisma.adminUser.update({
     where: { id: admin.id },
-    data: { lastLoginAt: new Date() },
+    data: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null },
   });
 
   redirect("/");
@@ -672,63 +734,89 @@ export async function loginAction(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- login/actions.test`
-Expected: `3 passed`.
+Expected: `8 passed`.
 
-- [ ] **Step 5: Build the login page UI**
+- [ ] **Step 5: Build the login page UI (Server Component + Client Component, so the error actually renders)**
 
 ```tsx
 // src/app/login/page.tsx
-import { loginAction } from "./actions";
+import { LoginForm } from "./LoginForm";
 
 export default function LoginPage() {
-  async function handleLogin(formData: FormData) {
-    "use server";
-    const result = await loginAction(formData);
-    return result;
-  }
-
   return (
     <main className="min-h-screen flex items-center justify-center bg-neutral-50">
-      <form
-        action={handleLogin}
-        className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white p-8 shadow-sm"
-      >
-        <h1 className="mb-6 text-lg font-semibold text-neutral-900">
-          Sign in to ClientOS
-        </h1>
-        <label className="mb-1 block text-sm text-neutral-600" htmlFor="email">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          required
-          className="mb-4 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
-        />
-        <label className="mb-1 block text-sm text-neutral-600" htmlFor="password">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          required
-          className="mb-6 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
-        />
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-neutral-900 py-2 text-sm font-medium text-white hover:bg-neutral-800"
-        >
-          Sign in
-        </button>
-      </form>
+      <LoginForm />
     </main>
   );
 }
 ```
 
-Note: this simple version doesn't yet render the `{ error }` result inline — Task 5's manual verification step below confirms the redirect/cookie behavior end-to-end; wiring the error message into client-visible UI state (via a small client component wrapper) is a fast follow, not blocking this task's deliverable (server-side login works and is fully tested).
+```tsx
+// src/app/login/LoginForm.tsx
+"use client";
+
+import { useState } from "react";
+import { loginAction } from "./actions";
+
+export function LoginForm() {
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(formData: FormData) {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await loginAction(formData);
+      if (result && "error" in result) {
+        setError(result.error);
+      }
+      // On success, loginAction calls redirect() itself — this component
+      // never regains control in that case.
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form
+      action={handleSubmit}
+      className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white p-8 shadow-sm"
+    >
+      <h1 className="mb-6 text-lg font-semibold text-neutral-900">
+        Sign in to ClientOS
+      </h1>
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      <label className="mb-1 block text-sm text-neutral-600" htmlFor="email">
+        Email
+      </label>
+      <input
+        id="email"
+        name="email"
+        type="email"
+        required
+        className="mb-4 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+      />
+      <label className="mb-1 block text-sm text-neutral-600" htmlFor="password">
+        Password
+      </label>
+      <input
+        id="password"
+        name="password"
+        type="password"
+        required
+        className="mb-6 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+      />
+      <button
+        type="submit"
+        disabled={submitting}
+        className="w-full rounded-lg bg-neutral-900 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+      >
+        {submitting ? "Signing in…" : "Sign in"}
+      </button>
+    </form>
+  );
+}
+```
 
 - [ ] **Step 6: Run full verification**
 
@@ -739,7 +827,7 @@ Expected: both pass clean.
 
 ```bash
 git add -A
-git commit -m "feat: add login page, server action, and session cookie handling
+git commit -m "feat: add login page/action with rate limiting and visible error state
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
