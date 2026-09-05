@@ -9,9 +9,9 @@ vi.mock("@/lib/require-admin", () => ({
 import { requireAdmin } from "@/lib/require-admin";
 import { createClientAction, updateClientAction } from "@/app/(app)/clients/actions";
 
-function mockAdmin(organizationId: number) {
+function mockAdmin(organizationId: number, adminId = 1) {
   vi.mocked(requireAdmin).mockResolvedValue({
-    id: 1,
+    id: adminId,
     email: "admin@example.com",
     organizationId,
   });
@@ -230,5 +230,69 @@ describe("addContactAction / removeContactAction", () => {
 
     // still there — the cross-org removal must not have taken effect
     expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).not.toBeNull();
+  });
+});
+
+import { addNoteAction } from "@/app/(app)/clients/actions";
+
+describe("addNoteAction", () => {
+  let orgId: number;
+  let clientId: number;
+  let adminId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "ABC Interiors" },
+    });
+    clientId = client.id;
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: org.id, email: "rohit@example.com", passwordHash: "x" },
+    });
+    adminId = admin.id;
+    mockAdmin(orgId, adminId);
+  });
+
+  it("adds a note and logs activity", async () => {
+    const form = new FormData();
+    form.set("body", "Client wants to pause Google Ads for a month.");
+
+    const result = await addNoteAction(clientId, form);
+
+    expect(result).toEqual({ ok: true });
+    const note = await prisma.clientNote.findFirst({ where: { clientId } });
+    expect(note?.body).toBe("Client wants to pause Google Ads for a month.");
+    expect(note?.authorAdminId).toBe(adminId);
+    const activity = await prisma.clientActivity.findFirst({
+      where: { clientId, eventType: "note.added" },
+    });
+    expect(activity).not.toBeNull();
+  });
+
+  it("rejects an empty note", async () => {
+    const form = new FormData();
+    form.set("body", "   ");
+
+    const result = await addNoteAction(clientId, form);
+
+    expect(result).toEqual({ error: "Note cannot be empty." });
+  });
+
+  it("rejects adding a note when the admin belongs to a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const otherAdmin = await prisma.adminUser.create({
+      data: { organizationId: otherOrg.id, email: "other@example.com", passwordHash: "x" },
+    });
+    mockAdmin(otherOrg.id, otherAdmin.id);
+    const form = new FormData();
+    form.set("body", "Should not be added.");
+
+    const result = await addNoteAction(clientId, form);
+
+    expect(result).toEqual({ error: "Client not found." });
+    expect(await prisma.clientNote.findFirst({ where: { clientId } })).toBeNull();
   });
 });

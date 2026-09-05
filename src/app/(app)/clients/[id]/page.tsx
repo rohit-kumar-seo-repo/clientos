@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/require-admin";
 import { getClientById } from "@/lib/clients";
 import { ActivityTimeline } from "@/components/clients/ActivityTimeline";
 import { ContactsPanel } from "@/components/clients/ContactsPanel";
+import { NotesPanel } from "@/components/clients/NotesPanel";
 
 export default async function ClientDetailPage({
   params,
@@ -53,6 +54,10 @@ export default async function ClientDetailPage({
 
         <div className="col-span-2">
           <ContactsPanel clientId={client.id} contacts={client.contacts} />
+        </div>
+
+        <div className="col-span-2">
+          <NotesPanel clientId={client.id} notes={client.notes} />
         </div>
       </div>
     </div>

@@ -160,3 +160,32 @@ export async function removeContactAction(
   await prisma.clientContact.deleteMany({ where: { id: contactId, clientId } });
   return { ok: true };
 }
+
+export async function addNoteAction(
+  clientId: number,
+  formData: FormData
+): Promise<{ error: string } | { ok: true }> {
+  const { admin, client } = await requireClientInOwnOrg(clientId);
+  if (!client) {
+    return { error: "Client not found." };
+  }
+
+  const body = String(formData.get("body") ?? "").trim();
+  if (!body) {
+    return { error: "Note cannot be empty." };
+  }
+
+  await prisma.clientNote.create({
+    data: { clientId, authorAdminId: admin.id, body },
+  });
+
+  await prisma.clientActivity.create({
+    data: {
+      clientId,
+      eventType: "note.added",
+      summary: "Note added.",
+    },
+  });
+
+  return { ok: true };
+}
