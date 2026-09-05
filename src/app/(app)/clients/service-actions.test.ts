@@ -7,7 +7,11 @@ vi.mock("@/lib/require-admin", () => ({
 }));
 
 import { requireAdmin } from "@/lib/require-admin";
-import { createServiceAction } from "@/app/(app)/clients/service-actions";
+import {
+  createServiceAction,
+  updateServiceAction,
+  updateServiceStatusAction,
+} from "@/app/(app)/clients/service-actions";
 
 function mockAdmin(organizationId: number, adminId = 1) {
   vi.mocked(requireAdmin).mockResolvedValue({
@@ -159,5 +163,180 @@ describe("createServiceAction", () => {
     expect(result).toEqual({ error: "Client not found." });
     const count = await prisma.clientService.count();
     expect(count).toBe(0);
+  });
+});
+
+describe("updateServiceAction", () => {
+  let orgId: number;
+  let clientServiceId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors" },
+    });
+    // createServiceAction (below) writes a ClientActivity row with a real
+    // FK to admin_users — mockAdmin alone only stubs requireAdmin()'s
+    // return value, it doesn't create a backing row, so a real AdminUser
+    // is required here (same pattern as the existing addNoteAction block
+    // in this file, and the fix Task 4's own review surfaced this gap
+    // through).
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
+    const created = await createServiceAction(
+      client.id,
+      serviceForm({
+        serviceName: "Local SEO",
+        feeInRupees: "5000",
+        frequency: "MONTHLY",
+        billingDay: "5",
+        startDate: "2026-08-03",
+      })
+    );
+    clientServiceId = (created as { clientServiceId: number }).clientServiceId;
+  });
+
+  it("updates the fee going forward without touching the existing billing period", async () => {
+    const before = await prisma.billingPeriod.findFirstOrThrow({
+      where: { billingPlan: { clientServiceId } },
+    });
+
+    const form = new FormData();
+    form.set("feeInRupees", "6000");
+    form.set("frequency", "MONTHLY");
+    form.set("billingDay", "5");
+    const result = await updateServiceAction(clientServiceId, form);
+
+    expect(result).toEqual({ ok: true });
+    const plan = await prisma.billingPlan.findUniqueOrThrow({
+      where: { clientServiceId },
+    });
+    expect(plan.amountInPaise).toBe(600000);
+
+    const stillTheOriginalPeriod = await prisma.billingPeriod.findUniqueOrThrow({
+      where: { id: before.id },
+    });
+    expect(stillTheOriginalPeriod.amountInPaise).toBe(500000); // unchanged
+  });
+
+  it("rejects a non-positive fee", async () => {
+    const form = new FormData();
+    form.set("feeInRupees", "-5");
+    form.set("frequency", "MONTHLY");
+    form.set("billingDay", "5");
+
+    const result = await updateServiceAction(clientServiceId, form);
+
+    expect(result).toEqual({ error: "Price must be greater than zero." });
+  });
+
+  it("returns an error for a service in a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+    const form = new FormData();
+    form.set("feeInRupees", "6000");
+    form.set("frequency", "MONTHLY");
+    form.set("billingDay", "5");
+
+    const result = await updateServiceAction(clientServiceId, form);
+
+    expect(result).toEqual({ error: "Service not found." });
+  });
+});
+
+describe("updateServiceStatusAction", () => {
+  let orgId: number;
+  let clientServiceId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors" },
+    });
+    // Both createServiceAction (below) and updateServiceStatusAction
+    // (called by every test in this block) write a ClientActivity row
+    // with a real FK to admin_users — see the note in the
+    // updateServiceAction block above for why a real row is required.
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
+    const created = await createServiceAction(
+      client.id,
+      serviceForm({
+        serviceName: "Local SEO",
+        feeInRupees: "5000",
+        frequency: "MONTHLY",
+        billingDay: "5",
+        startDate: "2026-08-03",
+      })
+    );
+    clientServiceId = (created as { clientServiceId: number }).clientServiceId;
+  });
+
+  it("pauses a service and logs activity", async () => {
+    const result = await updateServiceStatusAction(clientServiceId, "PAUSED");
+
+    expect(result).toEqual({ ok: true });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.status).toBe("PAUSED");
+    const activity = await prisma.clientActivity.findFirstOrThrow({
+      where: { eventType: "service.status_changed" },
+    });
+    expect(activity.summary).toContain("PAUSED");
+  });
+
+  it("rejects a status change for a service in a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+
+    const result = await updateServiceStatusAction(clientServiceId, "CANCELLED");
+
+    expect(result).toEqual({ error: "Service not found." });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.status).toBe("ACTIVE"); // untouched
+  });
+
+  it("leaves the existing billing period completely unchanged when pausing", async () => {
+    const before = await prisma.billingPeriod.findFirstOrThrow({
+      where: { billingPlan: { clientServiceId } },
+    });
+
+    await updateServiceStatusAction(clientServiceId, "PAUSED");
+
+    const after = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.amountInPaise).toBe(before.amountInPaise);
+    expect(after.dueDate.getTime()).toBe(before.dueDate.getTime());
+    expect(after.status).toBe(before.status);
+    expect(after.periodLabel).toBe(before.periodLabel);
+    const periodCount = await prisma.billingPeriod.count({
+      where: { billingPlan: { clientServiceId } },
+    });
+    expect(periodCount).toBe(1); // pausing does not spawn or remove periods
+  });
+
+  it("leaves the existing billing period completely unchanged when cancelling", async () => {
+    const before = await prisma.billingPeriod.findFirstOrThrow({
+      where: { billingPlan: { clientServiceId } },
+    });
+
+    await updateServiceStatusAction(clientServiceId, "CANCELLED");
+
+    const after = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.amountInPaise).toBe(before.amountInPaise);
+    expect(after.dueDate.getTime()).toBe(before.dueDate.getTime());
+    expect(after.status).toBe(before.status);
   });
 });
