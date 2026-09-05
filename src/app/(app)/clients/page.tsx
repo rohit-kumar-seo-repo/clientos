@@ -18,9 +18,10 @@ export default async function ClientsPage({
 }) {
   const admin = await requireAdmin();
   const params = await searchParams;
+  const activeStatus = parseStatus(params.status);
   const clients = await listClients(admin.organizationId, {
     search: params.q,
-    status: parseStatus(params.status),
+    status: activeStatus,
   });
 
   return (
@@ -34,6 +35,44 @@ export default async function ClientsPage({
           Add Client
         </Link>
       </div>
+
+      {/*
+        A plain GET form: the browser's own navigation writes `q` and `status`
+        into the query string, which this Server Component already reads back
+        out of `searchParams`. No client component and no onSubmit handler are
+        needed, and the resulting URL stays shareable and back-button-friendly.
+        `defaultValue` reflects the *parsed* status so a junk `?status=` value
+        in the URL falls back to "All" rather than showing a phantom selection.
+      */}
+      <form method="get" className="mb-4 flex gap-2">
+        <input
+          type="search"
+          name="q"
+          defaultValue={params.q ?? ""}
+          placeholder="Search business name"
+          aria-label="Search clients by business name"
+          className="w-64 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+        />
+        <select
+          name="status"
+          defaultValue={activeStatus ?? ""}
+          aria-label="Filter clients by status"
+          className="rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+        >
+          <option value="">All</option>
+          {VALID_STATUSES.map((status) => (
+            <option key={status} value={status}>
+              {status}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          className="rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+        >
+          Search
+        </button>
+      </form>
 
       <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
         <table className="w-full text-sm">
@@ -64,7 +103,9 @@ export default async function ClientsPage({
             {clients.length === 0 && (
               <tr>
                 <td colSpan={3} className="px-4 py-8 text-center text-neutral-400">
-                  No clients yet.
+                  {params.q || activeStatus
+                    ? "No clients match this search."
+                    : "No clients yet."}
                 </td>
               </tr>
             )}
