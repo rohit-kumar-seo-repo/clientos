@@ -1011,7 +1011,13 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
   const [markPaidError, setMarkPaidError] = useState<string | null>(null);
 
   const period = service.billingPlan?.billingPeriods[0];
-  const feeInRupees = (service.feeInPaise / 100).toLocaleString("en-IN");
+  // billingPlan.amountInPaise is the current-price source of truth (see
+  // Plan 1's Task 6 for why service.feeInPaise goes stale after an edit)
+  // — this is display text only, not the Mark Paid form's default amount,
+  // which correctly comes from the specific period being paid below.
+  const feeInRupees = ((service.billingPlan?.amountInPaise ?? service.feeInPaise) / 100).toLocaleString(
+    "en-IN"
+  );
   const isPaid = period?.status === "PAID";
 
   function handleStatusChange(next: "ACTIVE" | "PAUSED" | "CANCELLED") {

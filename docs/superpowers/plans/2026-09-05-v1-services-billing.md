@@ -16,6 +16,7 @@
 - A new `requireClientServiceInOwnOrg(clientServiceId)` helper (parallel to the existing `requireClientInOwnOrg` in `src/app/(app)/clients/actions.ts`) resolves a `clientServiceId` to its owning client + org in one query, returning `{ admin, clientService }` or `{ admin, clientService: null }` — never throws for a not-found/wrong-org id, callers check for `null`.
 - Money is always `Int` paise (matches the existing `feeInPaise`/`amountInPaise` convention) — never a float, never a string.
 - `BillingPeriod` rows, once created, are never edited except their `status` field transitioning `UPCOMING → PAID` (that transition is Plan 2's job, not this plan's — this plan only ever creates periods in `UPCOMING` status). Editing a `ClientService`'s price/frequency/billingDay only affects periods created *after* the edit — never rewrites an existing period's `amountInPaise` or `dueDate`.
+- **`BillingPlan.amountInPaise` is the current-price source of truth, not `ClientService.feeInPaise`.** Both start equal at creation (Task 3), but `updateServiceAction` (Task 5) only keeps `BillingPlan.amountInPaise` current on an edit — `ClientService.feeInPaise` is frozen at whatever it was when the service was first created. Any UI or query that needs "the service's current price" must read `billingPlan.amountInPaise`, the same way it already must for `frequency`/`billingDay` (found during Task 5's review; fixed forward in Task 6 rather than reopening the already-approved Task 5).
 - `ServiceTemplate` lookup-or-create is case-insensitive on `name` within the organization (so "local seo" and "Local SEO" resolve to the same template) — MySQL's default collation on this column is already case-insensitive (`utf8mb4_unicode_ci` or similar; verify during Task 2, don't assume).
 - Run `npm run build`, `npm run lint`, and the full `npm test` at the end of every task — all three must pass clean before moving to the next task.
 - Follow the established Server/Client component split for any form (`src/app/(app)/clients/new/page.tsx` + `ClientForm.tsx` is the reference pattern) — the page is a Server Component calling `requireAdmin()` for the render gate; the form is a `"use client"` component that calls the server action with no identity/ownership arguments.
@@ -1683,7 +1684,16 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
   const [isPending, startTransition] = useTransition();
 
   const period = service.billingPlan?.billingPeriods[0];
-  const feeInRupees = (service.feeInPaise / 100).toLocaleString("en-IN");
+  // Read the CURRENT price from billingPlan.amountInPaise, not
+  // service.feeInPaise: Task 5's updateServiceAction only keeps
+  // billingPlan.amountInPaise current on an edit (matching this plan's
+  // "editing only affects BillingPlan and periods going forward" rule) —
+  // service.feeInPaise stays frozen at whatever it was when the service
+  // was first created. billingPlan is already the single source of truth
+  // for frequency/billingDay for the same reason; treat price the same way.
+  const feeInRupees = ((service.billingPlan?.amountInPaise ?? service.feeInPaise) / 100).toLocaleString(
+    "en-IN"
+  );
 
   function handleStatusChange(next: "ACTIVE" | "PAUSED" | "CANCELLED") {
     startTransition(async () => {
