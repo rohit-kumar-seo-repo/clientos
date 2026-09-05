@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/require-admin";
 import { getClientById } from "@/lib/clients";
 import { ActivityTimeline } from "@/components/clients/ActivityTimeline";
+import { ContactsPanel } from "@/components/clients/ContactsPanel";
 
 export default async function ClientDetailPage({
   params,
@@ -49,6 +50,10 @@ export default async function ClientDetailPage({
           <h2 className="mb-4 text-sm font-medium text-neutral-900">Activity</h2>
           <ActivityTimeline activity={client.activity} />
         </section>
+
+        <div className="col-span-2">
+          <ContactsPanel clientId={client.id} contacts={client.contacts} />
+        </div>
       </div>
     </div>
   );

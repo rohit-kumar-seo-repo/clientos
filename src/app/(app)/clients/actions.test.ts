@@ -152,3 +152,83 @@ describe("updateClientAction", () => {
     expect(untouched?.businessName).toBe("ABC Interiors"); // confirms nothing was written
   });
 });
+
+import { addContactAction, removeContactAction } from "@/app/(app)/clients/actions";
+
+describe("addContactAction / removeContactAction", () => {
+  let orgId: number;
+  let clientId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "ABC Interiors" },
+    });
+    clientId = client.id;
+    mockAdmin(orgId);
+  });
+
+  it("adds a contact and logs activity", async () => {
+    const form = new FormData();
+    form.set("name", "Priya Mehta");
+    form.set("role", "Marketing Manager");
+    form.set("phone", "9999999999");
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({ ok: true });
+    const contact = await prisma.clientContact.findFirst({ where: { clientId } });
+    expect(contact?.name).toBe("Priya Mehta");
+    const activity = await prisma.clientActivity.findFirst({
+      where: { clientId, eventType: "contact.added" },
+    });
+    expect(activity?.summary).toContain("Priya Mehta");
+  });
+
+  it("rejects a contact with no name", async () => {
+    const form = new FormData();
+    form.set("name", " ");
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({ error: "Contact name is required." });
+  });
+
+  it("removes a contact", async () => {
+    const contact = await prisma.clientContact.create({
+      data: { clientId, name: "Priya Mehta" },
+    });
+
+    await removeContactAction(clientId, contact.id);
+
+    expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).toBeNull();
+  });
+
+  it("rejects adding a contact when the admin belongs to a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+    const form = new FormData();
+    form.set("name", "Should Not Be Added");
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({ error: "Client not found." });
+    expect(await prisma.clientContact.findFirst({ where: { clientId } })).toBeNull();
+  });
+
+  it("rejects removing a contact when the admin belongs to a different organization", async () => {
+    const contact = await prisma.clientContact.create({
+      data: { clientId, name: "Priya Mehta" },
+    });
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+
+    await removeContactAction(clientId, contact.id);
+
+    // still there — the cross-org removal must not have taken effect
+    expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).not.toBeNull();
+  });
+});
