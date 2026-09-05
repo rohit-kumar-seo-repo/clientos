@@ -24,6 +24,17 @@ export async function getClientById(organizationId: number, clientId: number) {
       contacts: { orderBy: { isPrimary: "desc" } },
       notes: { orderBy: { createdAt: "desc" } },
       activity: { orderBy: { createdAt: "desc" } },
+      services: {
+        orderBy: { createdAt: "asc" },
+        include: {
+          serviceTemplate: true,
+          billingPlan: {
+            include: {
+              billingPeriods: { orderBy: { periodLabel: "desc" }, take: 1 },
+            },
+          },
+        },
+      },
     },
   });
   return client;

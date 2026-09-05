@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "@/lib/db";
 import { resetDb } from "@/lib/test-db";
 import { listClients, getClientById } from "@/lib/clients";
+import { createClientService } from "@/lib/services";
 
 describe("listClients", () => {
   let orgId: number;
@@ -85,5 +86,30 @@ describe("getClientById", () => {
   it("returns null for a nonexistent id", async () => {
     const result = await getClientById(orgId, 999999);
     expect(result).toBeNull();
+  });
+});
+
+describe("getClientById with services", () => {
+  it("includes services with their template and current billing period", async () => {
+    await resetDb();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "ABC Interiors" },
+    });
+    await createClientService({
+      clientId: client.id,
+      serviceName: "Local SEO",
+      feeInPaise: 500000,
+      frequency: "MONTHLY",
+      billingDay: 5,
+      startDate: new Date(Date.UTC(2026, 7, 3)),
+      endDate: null,
+    });
+
+    const result = await getClientById(org.id, client.id);
+
+    expect(result?.services).toHaveLength(1);
+    expect(result?.services[0].serviceTemplate.name).toBe("Local SEO");
+    expect(result?.services[0].billingPlan?.billingPeriods).toHaveLength(1);
   });
 });
