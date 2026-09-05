@@ -6,6 +6,15 @@ vi.mock("@/lib/require-admin", () => ({
   requireAdmin: vi.fn(),
 }));
 
+// `revalidatePath` reads Next's per-request store and throws when called
+// outside a request scope, which is exactly where these unit tests run.
+// Mocking it also lets the tests below assert that each mutating action
+// actually asks for the client page to be re-rendered.
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+}));
+
+import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/require-admin";
 import { createClientAction, updateClientAction } from "@/app/(app)/clients/actions";
 
@@ -62,6 +71,45 @@ describe("createClientAction", () => {
     const result = await createClientAction(form);
 
     expect(result).toEqual({ error: "Business name is required." });
+  });
+
+  it("rejects an over-length phone instead of letting MySQL raise a 500", async () => {
+    // `Client.phone` is VarChar(20) and local MySQL runs in strict mode, so
+    // before this validation existed an ordinary long phone number (a number
+    // plus an extension, say) reached the driver and threw an unhandled
+    // error mid-request rather than coming back as a field error.
+    const form = new FormData();
+    form.set("businessName", "ABC Interiors");
+    form.set("phone", "+91 98765 43210 ext. 4021"); // 25 chars, limit is 20
+
+    const result = await createClientAction(form);
+
+    expect(result).toEqual({ error: "Phone is too long (max 20 characters)." });
+    // The write must be rejected before Prisma is touched at all.
+    expect(await prisma.client.count()).toBe(0);
+    expect(await prisma.clientActivity.count()).toBe(0);
+  });
+
+  it("rejects an over-length business name", async () => {
+    const form = new FormData();
+    form.set("businessName", "A".repeat(151)); // limit is 150
+
+    const result = await createClientAction(form);
+
+    expect(result).toEqual({
+      error: "Business name is too long (max 150 characters).",
+    });
+    expect(await prisma.client.count()).toBe(0);
+  });
+
+  it("accepts a value exactly at the column limit", async () => {
+    // Guards the boundary against an off-by-one that would reject valid input.
+    const form = new FormData();
+    form.set("businessName", "A".repeat(150));
+
+    const result = await createClientAction(form);
+
+    expect("clientId" in result).toBe(true);
   });
 
   it("derives organizationId from requireAdmin(), never from a caller-supplied value", async () => {
@@ -139,6 +187,22 @@ describe("updateClientAction", () => {
     expect(result).toEqual({ error: "Business name is required." });
   });
 
+  it("rejects an over-length phone and leaves the stored client untouched", async () => {
+    const form = new FormData();
+    form.set("businessName", "ABC Interiors Pvt Ltd");
+    form.set("phone", "+91 98765 43210 ext. 4021"); // 25 chars, limit is 20
+
+    const result = await updateClientAction(clientId, form);
+
+    expect(result).toEqual({ error: "Phone is too long (max 20 characters)." });
+    const untouched = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    expect(untouched.businessName).toBe("ABC Interiors"); // no partial write
+    expect(untouched.phone).toBe("111");
+    expect(
+      await prisma.clientActivity.count({ where: { clientId } })
+    ).toBe(0);
+  });
+
   it("returns an error when the authenticated admin belongs to a different organization than the client", async () => {
     const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
     mockAdmin(otherOrg.id); // simulates an admin from a different org attempting the edit
@@ -186,6 +250,9 @@ describe("addContactAction / removeContactAction", () => {
       where: { clientId, eventType: "contact.added" },
     });
     expect(activity?.summary).toContain("Priya Mehta");
+    // Without this the new contact and its activity row sit in the DB but
+    // stay invisible until the user manually reloads the page.
+    expect(revalidatePath).toHaveBeenCalledWith(`/clients/${clientId}`);
   });
 
   it("rejects a contact with no name", async () => {
@@ -197,6 +264,30 @@ describe("addContactAction / removeContactAction", () => {
     expect(result).toEqual({ error: "Contact name is required." });
   });
 
+  it("rejects an over-length contact phone without writing the contact", async () => {
+    const form = new FormData();
+    form.set("name", "Priya Mehta");
+    form.set("phone", "+91 98765 43210 ext. 4021"); // 25 chars, limit is 20
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({ error: "Phone is too long (max 20 characters)." });
+    expect(await prisma.clientContact.count({ where: { clientId } })).toBe(0);
+    expect(await prisma.clientActivity.count({ where: { clientId } })).toBe(0);
+  });
+
+  it("rejects an over-length contact name", async () => {
+    const form = new FormData();
+    form.set("name", "P".repeat(121)); // limit is 120
+
+    const result = await addContactAction(clientId, form);
+
+    expect(result).toEqual({
+      error: "Contact name is too long (max 120 characters).",
+    });
+    expect(await prisma.clientContact.count({ where: { clientId } })).toBe(0);
+  });
+
   it("removes a contact", async () => {
     const contact = await prisma.clientContact.create({
       data: { clientId, name: "Priya Mehta" },
@@ -205,6 +296,7 @@ describe("addContactAction / removeContactAction", () => {
     await removeContactAction(clientId, contact.id);
 
     expect(await prisma.clientContact.findUnique({ where: { id: contact.id } })).toBeNull();
+    expect(revalidatePath).toHaveBeenCalledWith(`/clients/${clientId}`);
   });
 
   it("rejects adding a contact when the admin belongs to a different organization", async () => {
@@ -270,6 +362,7 @@ describe("addNoteAction", () => {
       where: { clientId, eventType: "note.added" },
     });
     expect(activity).not.toBeNull();
+    expect(revalidatePath).toHaveBeenCalledWith(`/clients/${clientId}`);
   });
 
   it("rejects an empty note", async () => {
