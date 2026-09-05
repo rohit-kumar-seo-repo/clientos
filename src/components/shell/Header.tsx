@@ -1,3 +1,5 @@
+import { logoutAction } from "@/app/(app)/logout/actions";
+
 export function Header({ adminName }: { adminName: string }) {
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "long",
@@ -14,6 +16,19 @@ export function Header({ adminName }: { adminName: string }) {
         </h1>
         <p className="text-sm text-neutral-500">{today}</p>
       </div>
+
+      {/*
+        A form posting straight to a server action, so this stays a server
+        component — no client-side JS needed just to sign out.
+      */}
+      <form action={logoutAction}>
+        <button
+          type="submit"
+          className="text-sm text-neutral-500 hover:text-neutral-900 hover:underline"
+        >
+          Sign out
+        </button>
+      </form>
     </header>
   );
 }
