@@ -169,7 +169,7 @@ export async function updateClientAction(
   return { ok: true };
 }
 
-async function requireClientInOwnOrg(clientId: number) {
+export async function requireClientInOwnOrg(clientId: number) {
   const admin = await requireAdmin();
   const client = await prisma.client.findFirst({
     where: { id: clientId, organizationId: admin.organizationId },
