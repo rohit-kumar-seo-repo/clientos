@@ -772,7 +772,7 @@ Note: the template lookup is duplicated (client fetched twice) inside the transa
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- services.test`
-Expected: `10 passed`.
+Expected: `9 passed`.
 
 - [ ] **Step 5: Run full verification**
 
@@ -1253,6 +1253,37 @@ describe("updateServiceStatusAction", () => {
     });
     expect(service.status).toBe("ACTIVE"); // untouched
   });
+
+  it("leaves the existing billing period completely unchanged when pausing", async () => {
+    const before = await prisma.billingPeriod.findFirstOrThrow({
+      where: { billingPlan: { clientServiceId } },
+    });
+
+    await updateServiceStatusAction(clientServiceId, "PAUSED");
+
+    const after = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.amountInPaise).toBe(before.amountInPaise);
+    expect(after.dueDate.getTime()).toBe(before.dueDate.getTime());
+    expect(after.status).toBe(before.status);
+    expect(after.periodLabel).toBe(before.periodLabel);
+    const periodCount = await prisma.billingPeriod.count({
+      where: { billingPlan: { clientServiceId } },
+    });
+    expect(periodCount).toBe(1); // pausing does not spawn or remove periods
+  });
+
+  it("leaves the existing billing period completely unchanged when cancelling", async () => {
+    const before = await prisma.billingPeriod.findFirstOrThrow({
+      where: { billingPlan: { clientServiceId } },
+    });
+
+    await updateServiceStatusAction(clientServiceId, "CANCELLED");
+
+    const after = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.amountInPaise).toBe(before.amountInPaise);
+    expect(after.dueDate.getTime()).toBe(before.dueDate.getTime());
+    expect(after.status).toBe(before.status);
+  });
 });
 ```
 
@@ -1345,7 +1376,7 @@ export async function updateServiceStatusAction(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- service-actions.test`
-Expected: all pass (7 from Task 4 + 5 new = 12).
+Expected: all pass (7 from Task 4 + 7 new = 14).
 
 - [ ] **Step 5: Run full verification**
 

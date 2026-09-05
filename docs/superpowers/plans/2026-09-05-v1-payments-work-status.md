@@ -16,6 +16,7 @@
 - Every new server action calls `requireAdmin()` (via an ownership-checking helper) as its own first line — never trusts a caller-supplied id at face value. This plan introduces one new helper: `requireBillingPeriodInOwnOrg(billingPeriodId)`.
 - **Idempotency is enforced inside the database transaction, not by the UI.** A `BillingPeriod` already `PAID` cannot be marked paid again — the check-and-write happen atomically, so two concurrent Mark Paid clicks on the same period can't both succeed (matches the exact lost-update-race lesson Foundation's Task 4 fix already established for a different feature — same discipline, applied here).
 - **Historical `BillingPeriod` rows are never edited except the one `status` transition `UPCOMING → PAID`.** The next period's `amountInPaise` comes from the *current* `BillingPlan.amountInPaise` at the moment of generation (so a fee change already takes effect for the next cycle), never copied from the period just paid.
+- **A `ClientService` that is not `ACTIVE` (`PAUSED` or `CANCELLED`) never gets a new `BillingPeriod` generated for it** (confirmed with Rohit 2026-09-05) — if a lingering unpaid period on a paused/cancelled service is later settled via Mark Paid, the payment is recorded normally but no next period is created. Reactivating the service resumes normal generation on its next Mark Paid.
 - Money stays `Int` paise throughout; user-facing forms convert from rupees at the boundary, exactly like Plan 1's `feeInRupees` → `feeInPaise` conversion.
 - Run `npm run build`, `npm run lint`, and the full `npm test` at the end of every task — all three must pass clean before moving to the next task.
 
@@ -243,6 +244,57 @@ describe("markBillingPeriodPaid", () => {
     const updatedPeriod = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: period.id } });
     expect(updatedPeriod.status).toBe("PAID");
   });
+
+  it("does not generate a next period when the service is PAUSED", async () => {
+    const { plan, period, service } = await setupServiceWithOpenPeriod();
+    const admin = await prisma.adminUser.findFirstOrThrow();
+    await prisma.clientService.update({ where: { id: service.id }, data: { status: "PAUSED" } });
+
+    await markBillingPeriodPaid({
+      billingPeriodId: period.id,
+      amountInPaise: 500000,
+      paidAt: new Date(),
+      recordedByAdminId: admin.id,
+    });
+
+    const count = await prisma.billingPeriod.count({ where: { billingPlanId: plan.id } });
+    expect(count).toBe(1); // only the one period being paid — no next one
+    const paidPeriod = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: period.id } });
+    expect(paidPeriod.status).toBe("PAID"); // the payment itself still goes through
+  });
+
+  it("does not generate a next period when the service is CANCELLED", async () => {
+    const { plan, period, service } = await setupServiceWithOpenPeriod();
+    const admin = await prisma.adminUser.findFirstOrThrow();
+    await prisma.clientService.update({ where: { id: service.id }, data: { status: "CANCELLED" } });
+
+    await markBillingPeriodPaid({
+      billingPeriodId: period.id,
+      amountInPaise: 500000,
+      paidAt: new Date(),
+      recordedByAdminId: admin.id,
+    });
+
+    const count = await prisma.billingPeriod.count({ where: { billingPlanId: plan.id } });
+    expect(count).toBe(1);
+  });
+
+  it("resumes generating future periods once a paused service is reactivated", async () => {
+    const { plan, period, service } = await setupServiceWithOpenPeriod();
+    const admin = await prisma.adminUser.findFirstOrThrow();
+    await prisma.clientService.update({ where: { id: service.id }, data: { status: "PAUSED" } });
+    await prisma.clientService.update({ where: { id: service.id }, data: { status: "ACTIVE" } }); // reactivated before payment
+
+    await markBillingPeriodPaid({
+      billingPeriodId: period.id,
+      amountInPaise: 500000,
+      paidAt: new Date(),
+      recordedByAdminId: admin.id,
+    });
+
+    const count = await prisma.billingPeriod.count({ where: { billingPlanId: plan.id } });
+    expect(count).toBe(2); // normal generation resumes once ACTIVE again
+  });
 });
 ```
 
@@ -349,7 +401,14 @@ export async function markBillingPeriodPaid(
       data: { status: "PAID" },
     });
 
-    const nextLabel = nextPeriodLabel(period.periodLabel, period.billingPlan.frequency);
+    // A paused/cancelled service must never accrue a future obligation —
+    // this only matters when its last lingering unpaid period gets settled
+    // after the status change (the service itself was already updated
+    // elsewhere; this function only ever reads its current status here).
+    const serviceIsActive = period.billingPlan.clientService.status === "ACTIVE";
+    const nextLabel = serviceIsActive
+      ? nextPeriodLabel(period.periodLabel, period.billingPlan.frequency)
+      : null;
     if (nextLabel) {
       await tx.billingPeriod.create({
         data: {
@@ -369,7 +428,7 @@ export async function markBillingPeriodPaid(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- payments.test`
-Expected: `7 passed`.
+Expected: `10 passed`.
 
 - [ ] **Step 5: Run full verification**
 
@@ -897,7 +956,7 @@ export async function updateWorkStatusAction(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- service-actions.test`
-Expected: all pass (12 from Plan 1 + 8 new = 20).
+Expected: all pass (14 from Plan 1 + 8 new = 22).
 
 - [ ] **Step 5: Run full verification**
 

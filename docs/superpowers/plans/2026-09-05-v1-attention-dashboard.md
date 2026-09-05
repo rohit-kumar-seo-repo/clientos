@@ -523,7 +523,7 @@ export function rankServicesForAttention(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- attention.test`
-Expected: `24 passed`.
+Expected: `23 passed`.
 
 - [ ] **Step 5: Run full verification**
 
@@ -938,7 +938,7 @@ export async function getMonthlySummary(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- dashboard.test`
-Expected: `10 passed`.
+Expected: `9 passed`.
 
 - [ ] **Step 5: Run full verification**
 
