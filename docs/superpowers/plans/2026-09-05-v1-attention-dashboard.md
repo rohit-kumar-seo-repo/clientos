@@ -660,8 +660,9 @@ describe("getAttentionData", () => {
       serviceName: "Local SEO",
       feeInPaise: 500000,
       frequency: "MONTHLY",
-      billingDay: 1,
-      startDate: new Date(Date.UTC(2026, 7, 1)),
+      billingDay: 10, // matches TODAY's day-of-month so this period is paid
+                      // right on time — see the note below on why that matters
+      startDate: new Date(Date.UTC(2026, 8, 1)), // Sep 1 -> first period "2026-09", due Sep 10
       endDate: null,
     });
     const plan = await prisma.billingPlan.findUniqueOrThrow({ where: { clientServiceId: service.id } });
@@ -672,13 +673,19 @@ describe("getAttentionData", () => {
     await markBillingPeriodPaid({
       billingPeriodId: period.id,
       amountInPaise: 500000,
-      paidAt: TODAY,
+      paidAt: TODAY, // paid exactly on its Sep 10 due date
       recordedByAdminId: admin.id,
     });
 
     const ranked = await getAttentionData(orgId, TODAY);
 
-    // The just-generated next period (Oct 1) is more than 7 days out ->
+    // The just-generated next period is "2026-10", due Oct 10 — 30 days
+    // from TODAY (Sep 10), comfortably more than 7 days out. (Using
+    // billingDay 1 here instead would generate a next period due Sep 1,
+    // which is BEFORE TODAY — i.e. already overdue at the moment it's
+    // created, the opposite of what this test needs to check. The billing
+    // day has to land on/after TODAY relative to the paid period for the
+    // next cycle to land safely in the future.) ->
     // normal_upcoming_work, not one of the urgent payment tiers.
     expect(ranked[0].tier).toBe("normal_upcoming_work");
   });
