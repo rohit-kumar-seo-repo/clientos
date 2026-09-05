@@ -4,10 +4,9 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth";
-import { createSession } from "@/lib/session";
+import { createSession, SESSION_COOKIE_NAME } from "@/lib/session";
 
 const GENERIC_ERROR = "Invalid email or password.";
-const SESSION_COOKIE = "co_session";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -83,7 +82,7 @@ export async function loginAction(
   const { token, expiresAt } = await createSession(admin.id);
 
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
+  cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
