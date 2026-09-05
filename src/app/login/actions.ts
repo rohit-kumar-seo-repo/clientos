@@ -54,6 +54,21 @@ export async function loginAction(
     return { error: GENERIC_ERROR };
   }
 
+  // Reaching here with a non-null lockedUntil means the lock has EXPIRED.
+  // Clear the stale failure count before the password check: without this,
+  // failedLoginAttempts stays at the threshold forever, so the very next
+  // typo pushes it past MAX_FAILED_ATTEMPTS and re-locks the account for
+  // another 15 minutes — indefinitely, for a legitimate user who keeps
+  // mistyping. With a single admin and no other recovery path, that is a
+  // real self-lockout risk. An expired lockout now genuinely starts over:
+  // only 5 NEW consecutive failures can trigger the next one.
+  if (admin.lockedUntil) {
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
+  }
+
   const valid = await verifyPassword(password, admin.passwordHash);
   if (!valid) {
     // Atomic increment (via Prisma's `increment` operator) rather than

@@ -121,6 +121,54 @@ describe("loginAction", () => {
     );
   });
 
+  it("does not re-lock on a single failure after a lockout has expired", async () => {
+    // Regression test for a self-lockout trap: failedLoginAttempts used to be
+    // reset only on a SUCCESSFUL login, so after one lockout the counter sat
+    // at the threshold. Once the 15-minute lock expired, a single further
+    // typo incremented past the threshold and re-locked the account — over
+    // and over, for as long as a legitimate user kept trying. An expired
+    // lockout must start the count fresh.
+    const admin = await makeAdmin();
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 5, lockedUntil: new Date(Date.now() - 1000) },
+    });
+
+    await loginAction(loginForm("rohit@example.com", "wrong"));
+
+    const afterOneFailure = await prisma.adminUser.findUniqueOrThrow({
+      where: { id: admin.id },
+    });
+    expect(afterOneFailure.failedLoginAttempts).toBe(1); // not 6
+    expect(afterOneFailure.lockedUntil).toBeNull(); // not re-locked
+
+    // ...and the correct password still gets in, rather than being refused
+    // by a lockout the user could never wait out.
+    await expect(loginAction(loginForm("rohit@example.com", "hunter2"))).rejects.toThrow(
+      "NEXT_REDIRECT"
+    );
+    expect(cookieStore.get("co_session")).toBeTruthy();
+  });
+
+  it("re-locks only after 5 fresh failures following an expired lockout", async () => {
+    // The counterpart to the test above: clearing the stale count must not
+    // disable the lockout itself — 5 NEW consecutive failures still lock.
+    const admin = await makeAdmin();
+    await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: { failedLoginAttempts: 5, lockedUntil: new Date(Date.now() - 1000) },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await loginAction(loginForm("rohit@example.com", "wrong"));
+    }
+
+    const updated = await prisma.adminUser.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(updated.failedLoginAttempts).toBe(5);
+    expect(updated.lockedUntil).not.toBeNull();
+    expect(updated.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+  });
+
   it("runs a bcrypt comparison even for an unknown email (timing side-channel mitigation)", async () => {
     // Closes the gap where the "unknown email" branch used to return
     // immediately while the "wrong password" branch always ran a slow
