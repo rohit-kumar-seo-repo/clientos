@@ -10,7 +10,13 @@ export default async function EditClientPage({
 }) {
   const admin = await requireAdmin();
   const { id } = await params;
-  const client = await getClientById(admin.organizationId, Number(id));
+
+  // See the detail page: a non-numeric or non-integer segment must 404,
+  // not reach Prisma as NaN and throw.
+  const clientId = Number(id);
+  if (!Number.isInteger(clientId)) notFound();
+
+  const client = await getClientById(admin.organizationId, clientId);
   if (!client) notFound();
 
   return <EditClientForm client={client} />;

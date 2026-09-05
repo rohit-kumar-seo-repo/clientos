@@ -13,7 +13,16 @@ export default async function ClientDetailPage({
 }) {
   const admin = await requireAdmin();
   const { id } = await params;
-  const client = await getClientById(admin.organizationId, Number(id));
+
+  // `/clients/abc` yields NaN, which Prisma rejects as an invalid argument —
+  // a 500 for what should plainly be a 404. Same for a non-integer like
+  // `/clients/1.5`. Guard before the value reaches any query.
+  const clientId = Number(id);
+  if (!Number.isInteger(clientId)) {
+    notFound();
+  }
+
+  const client = await getClientById(admin.organizationId, clientId);
 
   if (!client) {
     notFound();
