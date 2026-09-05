@@ -14,6 +14,11 @@ describe("dueDateForPeriod", () => {
     expect(date.getUTCDate()).toBe(5);
   });
 
+  it("returns exactly midnight UTC, not just the right calendar day", () => {
+    const date = dueDateForPeriod("2026-09", 5);
+    expect(date.toISOString()).toBe("2026-09-05T00:00:00.000Z");
+  });
+
   it("clamps to the last day of a 30-day month when billingDay is 31", () => {
     const date = dueDateForPeriod("2026-04", 31); // April has 30 days
     expect(date.getUTCMonth()).toBe(3);
