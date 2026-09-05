@@ -835,6 +835,7 @@ function serviceForm(fields: Record<string, string>) {
 describe("createServiceAction", () => {
   let orgId: number;
   let clientId: number;
+  let adminId: number;
 
   beforeEach(async () => {
     await resetDb();
@@ -845,7 +846,15 @@ describe("createServiceAction", () => {
       data: { organizationId: orgId, businessName: "ABC Interiors" },
     });
     clientId = client.id;
-    mockAdmin(orgId);
+    // createServiceAction writes a ClientActivity row under a real FK to
+    // admin_users (added in Task 1) — mockAdmin alone only stubs
+    // requireAdmin()'s return value, it doesn't create a backing row, so
+    // a real AdminUser is required here too.
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    adminId = admin.id;
+    mockAdmin(orgId, adminId);
   });
 
   it("creates a service and returns its id", async () => {
@@ -881,7 +890,7 @@ describe("createServiceAction", () => {
       where: { clientId, eventType: "service.added" },
     });
     expect(activity.summary).toContain("Local SEO");
-    expect(activity.actorAdminId).toBe(1);
+    expect(activity.actorAdminId).toBe(adminId);
   });
 
   it("rejects a missing service name", async () => {
@@ -1139,7 +1148,16 @@ describe("updateServiceAction", () => {
     const client = await prisma.client.create({
       data: { organizationId: orgId, businessName: "ABC Interiors" },
     });
-    mockAdmin(orgId);
+    // createServiceAction (below) writes a ClientActivity row with a real
+    // FK to admin_users — mockAdmin alone only stubs requireAdmin()'s
+    // return value, it doesn't create a backing row, so a real AdminUser
+    // is required here (same pattern as the existing addNoteAction block
+    // in this file, and the fix Task 4's own review surfaced this gap
+    // through).
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
     const created = await createServiceAction(
       client.id,
       serviceForm({
@@ -1213,7 +1231,14 @@ describe("updateServiceStatusAction", () => {
     const client = await prisma.client.create({
       data: { organizationId: orgId, businessName: "ABC Interiors" },
     });
-    mockAdmin(orgId);
+    // Both createServiceAction (below) and updateServiceStatusAction
+    // (called by every test in this block) write a ClientActivity row
+    // with a real FK to admin_users — see the note in the
+    // updateServiceAction block above for why a real row is required.
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
     const created = await createServiceAction(
       client.id,
       serviceForm({

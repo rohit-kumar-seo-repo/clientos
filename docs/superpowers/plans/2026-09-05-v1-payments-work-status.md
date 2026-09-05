@@ -734,7 +734,18 @@ describe("updateWorkStatusAction", () => {
     const client = await prisma.client.create({
       data: { organizationId: orgId, businessName: "ABC Interiors" },
     });
-    mockAdmin(orgId);
+    // createServiceAction (below) writes a ClientActivity row under a real
+    // FK to admin_users (added in Plan 1's Task 1 migration), and this
+    // block's own updateWorkStatusAction calls do too whenever workStatus
+    // actually changes — mockAdmin alone only stubs requireAdmin()'s
+    // return value, it doesn't create a backing row. A real AdminUser is
+    // required here (Plan 1's Task 4 review surfaced this exact gap —
+    // same fix applied consistently wherever a mocked admin authors an
+    // activity row).
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
     const created = await createServiceAction(
       client.id,
       serviceForm({
