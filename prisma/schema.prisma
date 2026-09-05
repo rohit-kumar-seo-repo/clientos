@@ -30,6 +30,7 @@ enum ServiceStatus {
 enum BillingFrequency {
   MONTHLY
   QUARTERLY
+  HALF_YEARLY
   YEARLY
   ONE_TIME
 }
@@ -89,6 +90,13 @@ enum RecurrenceType {
   WEEKLY
   ONE_TIME
   CUSTOM
+}
+
+enum WorkStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  ON_HOLD
 }
 
 // Exactly the states listed in spec §19.
@@ -194,7 +202,9 @@ model AdminUser {
   sessions          AdminSession[]
   auditLogs         AuditLog[]
   clientNotes       ClientNote[]
+  clientActivity    ClientActivity[]
   refundsInitiated  Refund[]
+  paymentsRecorded  Payment[]
   reminderApprovals ReminderJob[]
 
   @@index([organizationId])
@@ -303,14 +313,16 @@ model ClientNote {
 // reminder.sent, ...) rather than a giant enum — same pattern as the
 // digital-products-bundle sibling project's *Event tables.
 model ClientActivity {
-  id        Int      @id @default(autoincrement())
-  clientId  Int
-  eventType String   @db.VarChar(60)
-  summary   String   @db.VarChar(255)
-  metadata  Json?
-  createdAt DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  clientId     Int
+  actorAdminId Int?
+  eventType    String   @db.VarChar(60)
+  summary      String   @db.VarChar(255)
+  metadata     Json?
+  createdAt    DateTime @default(now())
 
-  client Client @relation(fields: [clientId], references: [id])
+  client     Client     @relation(fields: [clientId], references: [id])
+  actorAdmin AdminUser? @relation(fields: [actorAdminId], references: [id])
 
   @@index([clientId])
   @@map("client_activity")
@@ -366,6 +378,12 @@ model ClientService {
   feeInPaise        Int
   startDate         DateTime
   status            ServiceStatus @default(ACTIVE)
+  endDate           DateTime?
+  workStatus        WorkStatus    @default(NOT_STARTED)
+  progressPercent   Int?
+  workNote          String?       @db.VarChar(500)
+  nextActionNote    String?       @db.VarChar(255)
+  nextActionDate    DateTime?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -510,6 +528,7 @@ model InvoiceLineItem {
 model Payment {
   id                Int           @id @default(autoincrement())
   invoiceId         Int
+  recordedByAdminId Int?
   razorpayOrderId   String?       @db.VarChar(60)
   razorpayPaymentId String?       @unique @db.VarChar(60)
   razorpaySignature String?       @db.VarChar(255)
@@ -521,7 +540,8 @@ model Payment {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  invoice         Invoice    @relation(fields: [invoiceId], references: [id])
+  recordedByAdmin AdminUser? @relation(fields: [recordedByAdminId], references: [id])
 
   refunds Refund[]
 
