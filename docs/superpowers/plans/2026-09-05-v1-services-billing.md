@@ -793,13 +793,13 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ## Task 4: `createServiceAction` + `requireClientServiceInOwnOrg` helper
 
 **Files:**
-- Modify: `src/app/(app)/clients/actions.ts` (add `requireClientServiceInOwnOrg`, exported for Plan 2 to reuse)
-- Create: `src/app/(app)/clients/service-actions.ts`
+- Modify: `src/app/(app)/clients/actions.ts` (change `requireClientInOwnOrg` from module-private to exported — a one-word visibility change, no new function added here)
+- Create: `src/app/(app)/clients/service-actions.ts` (this is where the new `requireClientServiceInOwnOrg` helper lives)
 - Test: `src/app/(app)/clients/service-actions.test.ts`
 
 **Interfaces:**
 - Consumes: `createClientService` (Task 3), the existing `requireAdmin`/`requireClientInOwnOrg` pattern.
-- Produces: `requireClientServiceInOwnOrg(clientServiceId: number): Promise<{ admin: Admin; clientService: (ClientService & { client: Client }) | null }>` (exported from `actions.ts` so Plan 2's Mark Paid and work-status actions can import it without duplicating the org-check pattern a third time); `createServiceAction(clientId: number, formData: FormData): Promise<{ error: string } | { clientServiceId: number }>`.
+- Produces: `requireClientServiceInOwnOrg(clientServiceId: number): Promise<{ admin: Admin; clientService: (ClientService & { client: Client }) | null }>` (exported from `service-actions.ts` — the same file `createServiceAction` lives in — so Plan 2's Mark Paid and work-status actions, which also live in this file's neighborhood, can import it without duplicating the org-check pattern a third time); `createServiceAction(clientId: number, formData: FormData): Promise<{ error: string } | { clientServiceId: number }>`.
 
 - [ ] **Step 1: Write the failing tests**
 
