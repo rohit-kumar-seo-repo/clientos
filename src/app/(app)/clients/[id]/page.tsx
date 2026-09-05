@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/require-admin";
 import { getClientById } from "@/lib/clients";
@@ -18,9 +19,17 @@ export default async function ClientDetailPage({
 
   return (
     <div>
-      <h1 className="mb-1 text-lg font-semibold text-neutral-900">
-        {client.businessName}
-      </h1>
+      <div className="mb-1 flex items-center gap-3">
+        <h1 className="text-lg font-semibold text-neutral-900">
+          {client.businessName}
+        </h1>
+        <Link
+          href={`/clients/${client.id}/edit`}
+          className="text-sm text-neutral-500 hover:text-neutral-900 hover:underline"
+        >
+          Edit
+        </Link>
+      </div>
       <p className="mb-6 text-sm text-neutral-500">{client.status}</p>
 
       <div className="grid grid-cols-2 gap-6">

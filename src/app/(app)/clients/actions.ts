@@ -48,3 +48,56 @@ function optionalString(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;
 }
+
+const EDITABLE_FIELDS = [
+  "businessName",
+  "contactPerson",
+  "phone",
+  "email",
+  "website",
+  "industry",
+  "location",
+] as const;
+
+export async function updateClientAction(
+  clientId: number,
+  formData: FormData
+): Promise<{ error: string } | { ok: true }> {
+  const admin = await requireAdmin();
+
+  const existing = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: admin.organizationId },
+  });
+  if (!existing) {
+    return { error: "Client not found." };
+  }
+
+  const businessName = String(formData.get("businessName") ?? "").trim();
+  if (!businessName) {
+    return { error: "Business name is required." };
+  }
+
+  const nextValues: Record<string, string | null> = { businessName };
+  for (const field of EDITABLE_FIELDS) {
+    if (field === "businessName") continue;
+    nextValues[field] = optionalString(formData, field);
+  }
+
+  const changedFields = EDITABLE_FIELDS.filter(
+    (field) => nextValues[field] !== (existing[field] ?? null)
+  );
+
+  await prisma.client.update({ where: { id: clientId }, data: nextValues });
+
+  if (changedFields.length > 0) {
+    await prisma.clientActivity.create({
+      data: {
+        clientId,
+        eventType: "client.updated",
+        summary: `Updated: ${changedFields.join(", ")}.`,
+      },
+    });
+  }
+
+  return { ok: true };
+}

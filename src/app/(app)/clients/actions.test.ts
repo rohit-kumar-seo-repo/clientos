@@ -7,7 +7,7 @@ vi.mock("@/lib/require-admin", () => ({
 }));
 
 import { requireAdmin } from "@/lib/require-admin";
-import { createClientAction } from "@/app/(app)/clients/actions";
+import { createClientAction, updateClientAction } from "@/app/(app)/clients/actions";
 
 function mockAdmin(organizationId: number) {
   vi.mocked(requireAdmin).mockResolvedValue({
@@ -84,5 +84,71 @@ describe("createClientAction", () => {
 
     const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
     expect(client.organizationId).toBe(otherOrg.id);
+  });
+});
+
+describe("updateClientAction", () => {
+  let orgId: number;
+  let clientId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors", phone: "111" },
+    });
+    clientId = client.id;
+    mockAdmin(orgId);
+  });
+
+  it("updates the client's fields", async () => {
+    const form = new FormData();
+    form.set("businessName", "ABC Interiors Pvt Ltd");
+    form.set("phone", "222");
+
+    const result = await updateClientAction(clientId, form);
+
+    expect(result).toEqual({ ok: true });
+    const updated = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(updated?.businessName).toBe("ABC Interiors Pvt Ltd");
+    expect(updated?.phone).toBe("222");
+  });
+
+  it("writes a client.updated activity row naming the changed fields", async () => {
+    const form = new FormData();
+    form.set("businessName", "ABC Interiors Pvt Ltd");
+    form.set("phone", "111"); // unchanged
+
+    await updateClientAction(clientId, form);
+
+    const activity = await prisma.clientActivity.findFirst({
+      where: { clientId, eventType: "client.updated" },
+    });
+    expect(activity?.summary).toContain("businessName");
+    expect(activity?.summary).not.toContain("phone");
+  });
+
+  it("rejects an empty business name", async () => {
+    const form = new FormData();
+    form.set("businessName", "");
+
+    const result = await updateClientAction(clientId, form);
+
+    expect(result).toEqual({ error: "Business name is required." });
+  });
+
+  it("returns an error when the authenticated admin belongs to a different organization than the client", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id); // simulates an admin from a different org attempting the edit
+    const form = new FormData();
+    form.set("businessName", "Hijacked");
+
+    const result = await updateClientAction(clientId, form);
+
+    expect(result).toEqual({ error: "Client not found." });
+    const untouched = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(untouched?.businessName).toBe("ABC Interiors"); // confirms nothing was written
   });
 });
