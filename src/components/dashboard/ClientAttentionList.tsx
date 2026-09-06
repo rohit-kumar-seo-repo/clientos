@@ -73,14 +73,14 @@ export function ClientAttentionList({
       <div className="overflow-hidden">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            {/* #=5% Client=19% Service=21% Issue=16% Amount=12% DueDate=14% Action=13% */}
-            <col style={{ width: "5%" }} />
-            <col style={{ width: "19%" }} />
+            {/* #=4% Client=21% Service=20% Issue=16% Amount=11% DueDate=18% Action=10% */}
+            <col style={{ width: "4%" }} />
             <col style={{ width: "21%" }} />
+            <col style={{ width: "20%" }} />
             <col style={{ width: "16%" }} />
-            <col style={{ width: "12%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "13%" }} />
+            <col style={{ width: "11%" }} />
+            <col style={{ width: "18%" }} />
+            <col style={{ width: "10%" }} />
           </colgroup>
           <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
@@ -162,7 +162,7 @@ function AttentionRow({
         </td>
         <td className="px-3 py-3 text-neutral-700 truncate" title={service.serviceName}>{service.serviceName}</td>
         <td className="px-3 py-3">
-          <span className={`inline-block rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
+          <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
             {label}
           </span>
         </td>
@@ -186,27 +186,21 @@ function AttentionRow({
               <button
                 type="button"
                 onClick={() => setShowMarkPaid((v) => !v)}
-                className={`rounded-lg px-3 py-1.5 text-xs text-white ${showMarkPaid ? "bg-neutral-500 hover:bg-neutral-600" : "bg-neutral-900 hover:bg-neutral-700"}`}
+                className={`whitespace-nowrap rounded-lg px-2 py-1 text-xs font-medium text-white ${showMarkPaid ? "bg-neutral-400 hover:bg-neutral-500" : "bg-neutral-900 hover:bg-neutral-700"}`}
               >
-                {showMarkPaid ? "Cancel" : "Mark Paid"}
+                {showMarkPaid ? "✕" : "Pay"}
               </button>
             )}
             {!hasPaymentAction && (
               <Link
                 href={`/clients/${service.clientId}`}
-                className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
+                className="text-sm text-neutral-400 hover:text-neutral-900"
+                title="Open client"
               >
-                Update
+                →
               </Link>
             )}
-            {hasPaymentAction && !showMarkPaid && (
-              <Link
-                href={`/clients/${service.clientId}`}
-                className="text-xs text-neutral-400 hover:text-neutral-900"
-              >
-                View
-              </Link>
-            )}
+            {/* View link removed: client name in col 2 is already a link */}
           </div>
         </td>
       </tr>
