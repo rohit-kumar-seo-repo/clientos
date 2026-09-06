@@ -45,8 +45,19 @@ export default async function WorkPage() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-hidden">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                {/* Client=13% Service=22% Status=11% Progress=7% Note=13% NextAction=13% NextActionDate=13% Action=8% */}
+                <col style={{ width: "13%" }} />
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "11%" }} />
+                <col style={{ width: "7%" }} />
+                <col style={{ width: "13%" }} />
+                <col style={{ width: "13%" }} />
+                <col style={{ width: "13%" }} />
+                <col style={{ width: "8%" }} />
+              </colgroup>
               <thead className="border-b border-neutral-200 text-left text-neutral-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Client</th>
@@ -55,7 +66,7 @@ export default async function WorkPage() {
                   <th className="px-4 py-3 font-medium">Progress</th>
                   <th className="px-4 py-3 font-medium">Note</th>
                   <th className="px-4 py-3 font-medium">Next Action</th>
-                  <th className="px-4 py-3 font-medium">Next Action Date</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Next Action Date</th>
                   <th className="px-4 py-3 font-medium"></th>
                 </tr>
               </thead>
@@ -78,13 +89,13 @@ export default async function WorkPage() {
                     <td className="px-4 py-3 text-neutral-600">
                       {svc.progressPercent != null ? `${svc.progressPercent}%` : "—"}
                     </td>
-                    <td className="max-w-xs px-4 py-3 text-neutral-600">
+                    <td className="px-4 py-3 text-neutral-600">
                       {svc.workNote ?? "—"}
                     </td>
-                    <td className="max-w-xs px-4 py-3 text-neutral-600">
+                    <td className="px-4 py-3 text-neutral-600">
                       {svc.nextActionNote ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-neutral-600">
+                    <td className="px-4 py-3 text-neutral-600 whitespace-nowrap">
                       {svc.nextActionDate
                         ? new Date(svc.nextActionDate).toLocaleDateString("en-IN", {
                             day: "numeric",
@@ -96,7 +107,7 @@ export default async function WorkPage() {
                     <td className="px-4 py-3">
                       <Link
                         href={`/clients/${svc.clientId}#service-${svc.id}`}
-                        className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+                        className="whitespace-nowrap rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
                       >
                         Edit Work
                       </Link>
