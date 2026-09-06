@@ -3,27 +3,22 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+// V1 primary nav — Calendar and Reports are deferred phases
 const PRIMARY_NAV = [
   { href: "/", label: "Overview" },
   { href: "/clients", label: "Clients" },
   { href: "/work", label: "Work" },
   { href: "/payments", label: "Payments" },
-  { href: "/calendar", label: "Calendar" },
-  { href: "/reports", label: "Reports" },
 ];
 
+// V1 management nav — Reminder Rules, Team, Integrations are deferred
 const MANAGEMENT_NAV = [
   { href: "/services", label: "Services" },
-  { href: "/reminder-rules", label: "Reminder Rules" },
-  { href: "/team", label: "Team" },
-  { href: "/integrations", label: "Integrations" },
 ];
 
+// V1 settings nav — Razorpay, Notifications, Preferences are deferred
 const SETTINGS_NAV = [
   { href: "/settings/organization", label: "Organization" },
-  { href: "/settings/razorpay", label: "Razorpay" },
-  { href: "/settings/notifications", label: "Notifications" },
-  { href: "/settings/preferences", label: "Preferences" },
 ];
 
 function isActivePath(pathname: string, href: string): boolean {
