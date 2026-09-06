@@ -1,8 +1,14 @@
 import { requireAdmin } from "@/lib/require-admin";
-import { getAttentionData, getMonthlySummary } from "@/lib/dashboard";
+import {
+  getAttentionData,
+  getMonthlySummary,
+  getRecentActivity,
+} from "@/lib/dashboard";
 import { AttentionSummary } from "@/components/dashboard/AttentionSummary";
 import { ClientAttentionList } from "@/components/dashboard/ClientAttentionList";
 import { MonthlySummary } from "@/components/dashboard/MonthlySummary";
+import { RecentActivity } from "@/components/dashboard/RecentActivity";
+import { UpcomingRenewals } from "@/components/dashboard/UpcomingRenewals";
 
 // I5: Resolve today as the current IST calendar date. This app is India-only
 // (₹-denominated, en-IN formatted). Between 00:00 and 05:30 IST, the UTC clock
@@ -27,17 +33,42 @@ function todayInIST(): Date {
 export default async function OverviewPage() {
   const admin = await requireAdmin();
   const today = todayInIST();
+  const todayISO = today.toISOString(); // safe to pass to client components
 
-  const [services, summary] = await Promise.all([
+  const [services, summary, recentActivity] = await Promise.all([
     getAttentionData(admin.organizationId, today),
     getMonthlySummary(admin.organizationId, today),
+    getRecentActivity(admin.organizationId, 6),
   ]);
 
   return (
     <div>
+      {/* Page header */}
+      <div className="mb-7">
+        <h1 className="text-xl font-semibold text-neutral-900">Overview</h1>
+        <p className="mt-1 text-sm text-neutral-500">
+          Everything you need to keep your clients and services on track
+        </p>
+      </div>
+
+      {/* Row 1 — Attention summary cards (5 KPIs) */}
       <AttentionSummary services={services} />
-      <ClientAttentionList services={services} />
-      <MonthlySummary summary={summary} />
+
+      {/* Row 2 — Attention list (left, wider) + Monthly summary (right) */}
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <ClientAttentionList services={services} todayISO={todayISO} />
+        </div>
+        <div className="lg:col-span-2">
+          <MonthlySummary summary={summary} />
+        </div>
+      </div>
+
+      {/* Row 3 — Recent activity (left) + Upcoming renewals (right) */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <RecentActivity items={recentActivity} />
+        <UpcomingRenewals services={services} todayISO={todayISO} />
+      </div>
     </div>
   );
 }

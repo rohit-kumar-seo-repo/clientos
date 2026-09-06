@@ -134,3 +134,36 @@ export async function getMonthlySummary(
 
   return { expectedInPaise, collectedInPaise, pendingInPaise, overdueInPaise };
 }
+
+// ---------------------------------------------------------------------------
+// Recent activity — org-scoped, newest first
+// ---------------------------------------------------------------------------
+
+export type RecentActivityItem = {
+  id: number;
+  clientId: number;
+  clientName: string;
+  eventType: string;
+  summary: string;
+  createdAt: Date;
+};
+
+export async function getRecentActivity(
+  organizationId: number,
+  limit = 6
+): Promise<RecentActivityItem[]> {
+  const rows = await prisma.clientActivity.findMany({
+    where: { client: { organizationId } },
+    include: { client: { select: { id: true, businessName: true } } },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    clientId: r.client.id,
+    clientName: r.client.businessName,
+    eventType: r.eventType,
+    summary: r.summary,
+    createdAt: r.createdAt,
+  }));
+}

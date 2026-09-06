@@ -6,17 +6,30 @@ import { useRouter } from "next/navigation";
 import type { RankedService } from "@/lib/attention";
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 
-const TIER_LABELS: Record<string, string> = {
-  overdue_payment: "Overdue",
-  due_today: "Due Today",
-  due_tomorrow: "Due Tomorrow",
-  due_within_3_days: "Due Soon",
-  due_within_7_days: "Due Soon",
-  overdue_work: "Work Overdue",
-  upcoming_renewal: "Renewal Upcoming",
-  normal_upcoming_work: "In Progress",
-  no_action_required: "On Track",
-};
+// Compute a specific issue label from tier + days data
+function issueLabel(service: RankedService, todayMs: number): string {
+  const { tier, daysOverdue, currentPeriod } = service;
+
+  if (tier === "overdue_payment") {
+    return `${daysOverdue} ${daysOverdue === 1 ? "day" : "days"} overdue`;
+  }
+  if (tier === "due_today") return "Due today";
+  if (tier === "due_tomorrow") return "Due tomorrow";
+  if (tier === "due_within_3_days" || tier === "due_within_7_days") {
+    if (currentPeriod?.dueDate) {
+      const daysLeft = Math.round(
+        (new Date(currentPeriod.dueDate).setUTCHours(0, 0, 0, 0) - todayMs) /
+          (24 * 60 * 60 * 1000)
+      );
+      return `Due in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`;
+    }
+    return "Due soon";
+  }
+  if (tier === "overdue_work") return "Work overdue";
+  if (tier === "upcoming_renewal") return "Renewal soon";
+  if (tier === "normal_upcoming_work") return "In progress";
+  return "On track";
+}
 
 const TIER_BADGE_CLASS: Record<string, string> = {
   overdue_payment: "bg-red-50 text-red-600",
@@ -30,34 +43,58 @@ const TIER_BADGE_CLASS: Record<string, string> = {
   no_action_required: "bg-emerald-50 text-emerald-700",
 };
 
-export function ClientAttentionList({ services }: { services: RankedService[] }) {
+export function ClientAttentionList({
+  services,
+  todayISO,
+}: {
+  services: RankedService[];
+  todayISO: string;
+}) {
+  const todayMs = new Date(todayISO).setUTCHours(0, 0, 0, 0);
   const visible = services.filter((s) => s.tier !== "no_action_required");
 
   return (
-    <div className="mb-6 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
       <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
-        <h2 className="text-sm font-medium text-neutral-900">Clients Requiring Attention</h2>
-        <span className="text-xs text-neutral-400">Sorted by priority</span>
+        <div>
+          <h2 className="text-sm font-medium text-neutral-900">Client Attention List</h2>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            Clients and services that need your attention, prioritised by urgency
+          </p>
+        </div>
+        <Link
+          href="/clients"
+          className="text-xs text-neutral-500 hover:text-neutral-900 hover:underline"
+        >
+          View All Clients →
+        </Link>
       </div>
+
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
-              <th className="px-4 py-3 font-medium">Client</th>
-              <th className="px-4 py-3 font-medium">Service</th>
-              <th className="px-4 py-3 font-medium">Payment</th>
-              <th className="px-4 py-3 font-medium">Work Status</th>
-              <th className="px-4 py-3 font-medium">Due Date</th>
-              <th className="px-4 py-3 font-medium">Action</th>
+              <th className="px-4 py-2.5 font-medium text-xs">#</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Client</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Service</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Issue</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Amount</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Due Date</th>
+              <th className="px-4 py-2.5 font-medium text-xs">Action</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((service) => (
-              <AttentionRow key={service.clientServiceId} service={service} />
+            {visible.map((service, idx) => (
+              <AttentionRow
+                key={service.clientServiceId}
+                service={service}
+                rowNum={idx + 1}
+                todayMs={todayMs}
+              />
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-neutral-400">
+                <td colSpan={7} className="px-4 py-10 text-center text-neutral-400 text-xs">
                   Nothing needs attention right now.
                 </td>
               </tr>
@@ -69,11 +106,27 @@ export function ClientAttentionList({ services }: { services: RankedService[] })
   );
 }
 
-function AttentionRow({ service }: { service: RankedService }) {
+function AttentionRow({
+  service,
+  rowNum,
+  todayMs,
+}: {
+  service: RankedService;
+  rowNum: number;
+  todayMs: number;
+}) {
   const router = useRouter();
   const [showMarkPaid, setShowMarkPaid] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const period = service.currentPeriod;
+  const label = issueLabel(service, todayMs);
+  const badgeClass = TIER_BADGE_CLASS[service.tier] ?? "bg-neutral-100 text-neutral-500";
+
+  const hasPaymentAction =
+    period && period.status !== "PAID" &&
+    ["overdue_payment", "due_today", "due_tomorrow", "due_within_3_days", "due_within_7_days"].includes(
+      service.tier
+    );
 
   async function handleMarkPaid(formData: FormData) {
     if (!period) return;
@@ -89,6 +142,7 @@ function AttentionRow({ service }: { service: RankedService }) {
 
   return (
     <tr className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+      <td className="px-4 py-3 text-xs text-neutral-400">{rowNum}</td>
       <td className="px-4 py-3 font-medium text-neutral-900">
         <Link href={`/clients/${service.clientId}`} className="hover:underline">
           {service.clientName}
@@ -96,44 +150,51 @@ function AttentionRow({ service }: { service: RankedService }) {
       </td>
       <td className="px-4 py-3 text-neutral-700">{service.serviceName}</td>
       <td className="px-4 py-3">
-        <span className={`rounded-md px-2 py-0.5 text-xs ${TIER_BADGE_CLASS[service.tier]}`}>
-          {TIER_LABELS[service.tier]}
+        <span className={`inline-block rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
+          {label}
         </span>
-        {period && (
-          <span className="ml-2 text-neutral-600">
-            ₹{(period.amountInPaise / 100).toLocaleString("en-IN")}
-            {service.daysOverdue > 0 && ` — ${service.daysOverdue} days overdue`}
-          </span>
-        )}
       </td>
-      <td className="px-4 py-3 text-neutral-600">
-        {service.workStatus.replace("_", " ")}
+      <td className="px-4 py-3 text-neutral-900 font-medium">
+        {service.outstandingAmountInPaise > 0
+          ? `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
+          : <span className="text-neutral-400">—</span>}
       </td>
       <td className="px-4 py-3 text-neutral-600">
         {period
           ? new Date(period.dueDate).toLocaleDateString("en-IN", {
               day: "numeric",
               month: "short",
+              year: "numeric",
             })
-          : "—"}
+          : <span className="text-neutral-400">—</span>}
       </td>
       <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          {period && period.status !== "PAID" && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {hasPaymentAction && (
             <button
               type="button"
               onClick={() => setShowMarkPaid((v) => !v)}
-              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
+              className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700"
             >
               Mark Paid
             </button>
           )}
-          <Link
-            href={`/clients/${service.clientId}`}
-            className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
-          >
-            View
-          </Link>
+          {!hasPaymentAction && (
+            <Link
+              href={`/clients/${service.clientId}`}
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
+            >
+              Update
+            </Link>
+          )}
+          {hasPaymentAction && (
+            <Link
+              href={`/clients/${service.clientId}`}
+              className="text-xs text-neutral-400 hover:text-neutral-900"
+            >
+              View
+            </Link>
+          )}
         </div>
         {showMarkPaid && (
           <MarkPaidInlineForm
@@ -162,7 +223,10 @@ function MarkPaidInlineForm({
   onCancel: () => void;
 }) {
   return (
-    <form action={onSubmit} className="mt-2 flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-2">
+    <form
+      action={onSubmit}
+      className="mt-2 flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-2"
+    >
       {error && <p className="text-xs text-red-600">{error}</p>}
       <label className="flex flex-col gap-1">
         <span className="text-xs text-neutral-500">Amount (₹)</span>
@@ -185,10 +249,17 @@ function MarkPaidInlineForm({
         />
       </label>
       <div className="flex gap-2">
-        <button type="submit" className="rounded bg-neutral-900 px-2 py-1 text-xs text-white">
+        <button
+          type="submit"
+          className="rounded bg-neutral-900 px-2 py-1 text-xs text-white"
+        >
           Confirm
         </button>
-        <button type="button" onClick={onCancel} className="rounded border border-neutral-300 px-2 py-1 text-xs">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-neutral-300 px-2 py-1 text-xs"
+        >
           Cancel
         </button>
       </div>
