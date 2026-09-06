@@ -113,7 +113,7 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
   }
 
   return (
-    <li className="rounded-lg border border-neutral-100 p-3 text-sm">
+    <li id={`service-${service.id}`} className="rounded-lg border border-neutral-100 p-3 text-sm scroll-mt-4">
       <div className="flex items-center justify-between">
         <span className="font-medium text-neutral-900">
           {service.serviceTemplate.name}
@@ -145,15 +145,25 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
           )}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => setShowWorkForm((v) => !v)}
-        className="mt-1 block text-neutral-500 hover:text-neutral-900"
-      >
-        Work: {service.workStatus.replace("_", " ")}
-        {service.progressPercent != null && ` — ${service.progressPercent}%`}
-        {service.workNote && ` · ${service.workNote}`}
-      </button>
+      {/* Work status row — read-only summary + Update Work button */}
+      <div className="mt-2 flex items-center gap-2 flex-wrap">
+        <WorkStatusBadge status={service.workStatus} />
+        {service.progressPercent != null && (
+          <span className="text-xs text-neutral-500">{service.progressPercent}%</span>
+        )}
+        {service.nextActionNote && (
+          <span className="text-xs text-neutral-400 truncate max-w-[180px]" title={service.nextActionNote}>
+            → {service.nextActionNote}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setShowWorkForm((v) => !v)}
+          className="ml-auto rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+        >
+          {showWorkForm ? "Close" : "Update Work"}
+        </button>
+      </div>
       {showWorkForm && (
         <form
           action={handleWorkUpdate}
@@ -349,6 +359,26 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`rounded-md px-2 py-0.5 text-xs ${styles[status] ?? styles.CANCELLED}`}>
       {status}
+    </span>
+  );
+}
+
+function WorkStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    NOT_STARTED: "bg-neutral-100 text-neutral-600",
+    IN_PROGRESS: "bg-blue-50 text-blue-700",
+    COMPLETED: "bg-emerald-50 text-emerald-700",
+    ON_HOLD: "bg-amber-50 text-amber-700",
+  };
+  const labels: Record<string, string> = {
+    NOT_STARTED: "Not Started",
+    IN_PROGRESS: "In Progress",
+    COMPLETED: "Completed",
+    ON_HOLD: "On Hold",
+  };
+  return (
+    <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.NOT_STARTED}`}>
+      {labels[status] ?? status}
     </span>
   );
 }

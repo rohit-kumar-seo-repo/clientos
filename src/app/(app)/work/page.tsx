@@ -95,10 +95,10 @@ export default async function WorkPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Link
-                        href={`/clients/${svc.clientId}`}
-                        className="text-xs text-neutral-500 hover:text-neutral-900 hover:underline"
+                        href={`/clients/${svc.clientId}#service-${svc.id}`}
+                        className="rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
                       >
-                        View
+                        Edit Work
                       </Link>
                     </td>
                   </tr>
