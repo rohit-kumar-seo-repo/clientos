@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ClientService,
@@ -9,6 +9,7 @@ import type {
   BillingPeriod,
 } from "@/generated/prisma/client";
 import { updateServiceStatusAction } from "@/app/(app)/clients/service-actions";
+import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 import { AddServiceForm } from "./AddServiceForm";
 
 type ServiceWithBilling = ClientService & {
@@ -54,24 +55,36 @@ export function ServicesPanel({
 function ServiceRow({ service }: { service: ServiceWithBilling }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [showMarkPaid, setShowMarkPaid] = useState(false);
+  const [markPaidError, setMarkPaidError] = useState<string | null>(null);
 
   const period = service.billingPlan?.billingPeriods[0];
-  // Read the CURRENT price from billingPlan.amountInPaise, not
-  // service.feeInPaise: Task 5's updateServiceAction only keeps
-  // billingPlan.amountInPaise current on an edit (matching this plan's
-  // "editing only affects BillingPlan and periods going forward" rule) —
-  // service.feeInPaise stays frozen at whatever it was when the service
-  // was first created. billingPlan is already the single source of truth
-  // for frequency/billingDay for the same reason; treat price the same way.
+  // billingPlan.amountInPaise is the current-price source of truth (see
+  // Plan 1's Task 6 for why service.feeInPaise goes stale after an edit)
+  // — this is display text only, not the Mark Paid form's default amount,
+  // which correctly comes from the specific period being paid below.
   const feeInRupees = ((service.billingPlan?.amountInPaise ?? service.feeInPaise) / 100).toLocaleString(
     "en-IN"
   );
+  const isPaid = period?.status === "PAID";
 
   function handleStatusChange(next: "ACTIVE" | "PAUSED" | "CANCELLED") {
     startTransition(async () => {
       await updateServiceStatusAction(service.id, next);
       router.refresh();
     });
+  }
+
+  async function handleMarkPaid(formData: FormData) {
+    if (!period) return;
+    const result = await markPaidAction(period.id, formData);
+    if ("error" in result) {
+      setMarkPaidError(result.error);
+      return;
+    }
+    setMarkPaidError(null);
+    setShowMarkPaid(false);
+    router.refresh();
   }
 
   return (
@@ -86,7 +99,8 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
         ₹{feeInRupees} — {FREQUENCY_LABELS[service.billingPlan?.frequency ?? ""]}
         {period && (
           <>
-            {" · Next due "}
+            {" · "}
+            {isPaid ? "Paid" : "Next due"}{" "}
             {new Date(period.dueDate).toLocaleDateString("en-IN", {
               day: "numeric",
               month: "short",
@@ -128,7 +142,65 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
           >
             Cancel
           </button>
+          {period && !isPaid && (
+            <button
+              type="button"
+              onClick={() => setShowMarkPaid((v) => !v)}
+              className="rounded-md bg-neutral-900 px-2 py-1 text-white hover:bg-neutral-800"
+            >
+              Mark Paid
+            </button>
+          )}
         </div>
+      )}
+      {showMarkPaid && period && (
+        <form
+          action={handleMarkPaid}
+          className="mt-3 flex items-end gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3"
+        >
+          {markPaidError && (
+            <p className="w-full text-xs text-red-600">{markPaidError}</p>
+          )}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-600" htmlFor={`amount-${period.id}`}>
+              Amount (₹)
+            </label>
+            <input
+              id={`amount-${period.id}`}
+              name="amountInRupees"
+              type="number"
+              defaultValue={period.amountInPaise / 100}
+              required
+              className="w-28 rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-neutral-600" htmlFor={`paidAt-${period.id}`}>
+              Date
+            </label>
+            <input
+              id={`paidAt-${period.id}`}
+              name="paidAt"
+              type="date"
+              defaultValue={new Date().toISOString().slice(0, 10)}
+              required
+              className="rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+          >
+            Confirm
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMarkPaid(false)}
+            className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancel
+          </button>
+        </form>
       )}
     </li>
   );
