@@ -71,7 +71,16 @@ export function ClientAttentionList({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col className="w-8" />
+            <col className="w-[22%]" />
+            <col className="w-[26%]" />
+            <col className="w-[18%]" />
+            <col className="w-[12%]" />
+            <col className="w-[13%]" />
+            <col className="w-[9%]" />
+          </colgroup>
           <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
               <th className="px-4 py-2.5 font-medium text-xs">#</th>
@@ -79,7 +88,7 @@ export function ClientAttentionList({
               <th className="px-4 py-2.5 font-medium text-xs">Service</th>
               <th className="px-4 py-2.5 font-medium text-xs">Issue</th>
               <th className="px-4 py-2.5 font-medium text-xs">Amount</th>
-              <th className="px-4 py-2.5 font-medium text-xs">Due Date</th>
+              <th className="px-4 py-2.5 font-medium text-xs whitespace-nowrap">Due Date</th>
               <th className="px-4 py-2.5 font-medium text-xs">Action</th>
             </tr>
           </thead>
@@ -143,12 +152,12 @@ function AttentionRow({
   return (
     <tr className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
       <td className="px-4 py-3 text-xs text-neutral-400">{rowNum}</td>
-      <td className="px-4 py-3 font-medium text-neutral-900">
-        <Link href={`/clients/${service.clientId}`} className="hover:underline">
+      <td className="px-4 py-3 font-medium text-neutral-900 truncate">
+        <Link href={`/clients/${service.clientId}`} className="hover:underline" title={service.clientName}>
           {service.clientName}
         </Link>
       </td>
-      <td className="px-4 py-3 text-neutral-700">{service.serviceName}</td>
+      <td className="px-4 py-3 text-neutral-700 truncate" title={service.serviceName}>{service.serviceName}</td>
       <td className="px-4 py-3">
         <span className={`inline-block rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
           {label}
@@ -159,7 +168,7 @@ function AttentionRow({
           ? `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
           : <span className="text-neutral-400">—</span>}
       </td>
-      <td className="px-4 py-3 text-neutral-600">
+      <td className="px-4 py-3 text-neutral-600 whitespace-nowrap">
         {period
           ? new Date(period.dueDate).toLocaleDateString("en-IN", {
               day: "numeric",
