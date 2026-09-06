@@ -143,7 +143,7 @@ describe("getPaymentHistoryForClient", () => {
       recordedByAdminId: admin.id,
     });
 
-    const history = await getPaymentHistoryForClient(client.id);
+    const history = await getPaymentHistoryForClient(org.id, client.id);
 
     expect(history).toHaveLength(1);
     expect(history[0].amountInPaise).toBe(500000);
@@ -157,7 +157,41 @@ describe("getPaymentHistoryForClient", () => {
       data: { organizationId: org.id, businessName: "ABC Interiors" },
     });
 
-    const history = await getPaymentHistoryForClient(client.id);
+    const history = await getPaymentHistoryForClient(org.id, client.id);
+
+    expect(history).toEqual([]);
+  });
+
+  it("does not return another organization's payments", async () => {
+    await resetDb();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org" } });
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "ABC Interiors" },
+    });
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: org.id, email: "a@example.com", passwordHash: "x" },
+    });
+    const service = await createClientService({
+      clientId: client.id,
+      serviceName: "Local SEO",
+      feeInPaise: 500000,
+      frequency: "MONTHLY",
+      billingDay: 1,
+      startDate: new Date(Date.UTC(2026, 6, 1)),
+      endDate: null,
+    });
+    const plan = await prisma.billingPlan.findUniqueOrThrow({ where: { clientServiceId: service.id } });
+    const period = await prisma.billingPeriod.findFirstOrThrow({ where: { billingPlanId: plan.id } });
+    await markBillingPeriodPaid({
+      billingPeriodId: period.id,
+      amountInPaise: 500000,
+      paidAt: new Date(Date.UTC(2026, 6, 3)),
+      recordedByAdminId: admin.id,
+    });
+
+    // querying from a different org should return nothing
+    const history = await getPaymentHistoryForClient(otherOrg.id, client.id);
 
     expect(history).toEqual([]);
   });

@@ -10,6 +10,7 @@ import type {
 } from "@/generated/prisma/client";
 import { updateServiceStatusAction, updateWorkStatusAction } from "@/app/(app)/clients/service-actions";
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
+import { startOfUTCDay } from "@/lib/attention";
 import { AddServiceForm } from "./AddServiceForm";
 
 type ServiceWithBilling = ClientService & {
@@ -27,10 +28,14 @@ const FREQUENCY_LABELS: Record<string, string> = {
   ONE_TIME: "One-time",
 };
 
+// I4: Use startOfUTCDay for both operands so this helper agrees with the
+// attention engine's daysUntil(), which also normalizes to UTC midnight.
+// A raw wall-clock diff against new Date() would cause the renewal badge to
+// disagree with the dashboard tier depending on the time of day the page loads.
 function isWithin30Days(date: Date): boolean {
-  const now = new Date();
-  const diffMs = new Date(date).getTime() - now.getTime();
-  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+  const todayUTC = startOfUTCDay(new Date());
+  const dateUTC = startOfUTCDay(new Date(date));
+  const diffDays = (dateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24);
   return diffDays >= 0 && diffDays <= 30;
 }
 

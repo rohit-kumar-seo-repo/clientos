@@ -9,7 +9,12 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
   const workCount = services.filter((s) => s.tier === "overdue_work").length;
   const renewalCount = services.filter((s) => s.tier === "upcoming_renewal").length;
 
-  const totalAttention = overdueCount + dueTodayCount + dueSoonCount + workCount;
+  // I3: totalAttention must match exactly what ClientAttentionList renders —
+  // that component shows all tiers except no_action_required (tier 9).
+  // Excluding tiers 7 (upcoming_renewal) and 8 (normal_upcoming_work) from the
+  // count while the list shows them caused the headline to read "0 items" above
+  // a populated table.
+  const totalAttention = services.filter((s) => s.tier !== "no_action_required").length;
 
   const cards = [
     { label: "Overdue Payments", value: overdueCount, tone: "red" as const },

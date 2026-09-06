@@ -40,9 +40,15 @@ export async function getClientById(organizationId: number, clientId: number) {
   return client;
 }
 
-export async function getPaymentHistoryForClient(clientId: number) {
+// I6: Takes organizationId as its first argument to follow this module's
+// convention (listClients, getClientById both scope to organizationId in the
+// query itself). Without the scope, correctness depended solely on the caller
+// verifying ownership before calling — a guarantee held by statement ordering,
+// not by the query. Adding it here makes the function safe to call from any
+// future context without a prior ownership check.
+export async function getPaymentHistoryForClient(organizationId: number, clientId: number) {
   return prisma.payment.findMany({
-    where: { invoice: { clientId } },
+    where: { invoice: { clientId, client: { organizationId } } },
     orderBy: { createdAt: "desc" },
   });
 }

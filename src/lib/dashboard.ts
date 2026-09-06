@@ -70,10 +70,16 @@ export async function getMonthlySummary(
   const label = currentPeriodLabel(today);
   const normalizedToday = startOfUTCDay(today);
 
+  // I1: scope to ACTIVE services only — mirrors getAttentionData's filter so the
+  // Monthly Summary's Overdue figure can never contradict the Attention section's
+  // Overdue card. Without this, a paused/cancelled service carrying a stranded
+  // unpaid period would inflate Overdue here while being invisible to Attention.
   const thisMonthPeriods = await prisma.billingPeriod.findMany({
     where: {
       periodLabel: label,
-      billingPlan: { clientService: { client: { organizationId } } },
+      billingPlan: {
+        clientService: { status: "ACTIVE", client: { organizationId } },
+      },
     },
   });
 
@@ -103,13 +109,23 @@ export async function getMonthlySummary(
   );
   const overdueThisMonthInPaise = overdueThisMonth.reduce((sum, p) => sum + p.amountInPaise, 0);
 
-  // Overdue spans ALL months, not just this one — see the plan's documented
-  // interpretation at the top of this file.
+  // Overdue spans ALL months, not just this one — consistent with getAttentionData
+  // which also uses a cross-month view for the Attention section's Overdue card.
+  // I1: same ACTIVE filter as thisMonthPeriods above so the two figures agree.
+  //
+  // I2: NOTE on "Expected" — a client in arrears (last month unpaid) has no
+  // current-month BillingPeriod row until the prior one is marked PAID (by
+  // design: periods are generated lazily on payment). So Expected legitimately
+  // reads ₹0 for such clients; Overdue captures the outstanding obligation.
+  // This is the correct interpretation of the plan's "how much business is
+  // billed this cycle" definition; it is not a bug.
   const allOverduePeriods = await prisma.billingPeriod.findMany({
     where: {
       status: { not: "PAID" },
       dueDate: { lt: normalizedToday },
-      billingPlan: { clientService: { client: { organizationId } } },
+      billingPlan: {
+        clientService: { status: "ACTIVE", client: { organizationId } },
+      },
     },
   });
   const overdueInPaise = allOverduePeriods.reduce((sum, p) => sum + p.amountInPaise, 0);

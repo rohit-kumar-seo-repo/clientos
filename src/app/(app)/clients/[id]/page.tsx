@@ -30,7 +30,7 @@ export default async function ClientDetailPage({
     notFound();
   }
 
-  const payments = await getPaymentHistoryForClient(clientId);
+  const payments = await getPaymentHistoryForClient(admin.organizationId, clientId);
 
   return (
     <div>
