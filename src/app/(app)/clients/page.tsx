@@ -74,18 +74,30 @@ export default async function ClientsPage({
         </button>
       </form>
 
-      <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            {/* Business=22% Contact=15% Phone=12% Email=23% Location=18% Status=10% */}
+            <col style={{ width: "22%" }} />
+            <col style={{ width: "15%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "23%" }} />
+            <col style={{ width: "18%" }} />
+            <col style={{ width: "10%" }} />
+          </colgroup>
           <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
               <th className="px-4 py-3 font-medium">Business</th>
               <th className="px-4 py-3 font-medium">Contact</th>
+              <th className="px-4 py-3 font-medium whitespace-nowrap">Phone</th>
+              <th className="px-4 py-3 font-medium">Email</th>
+              <th className="px-4 py-3 font-medium">Location</th>
               <th className="px-4 py-3 font-medium">Status</th>
             </tr>
           </thead>
           <tbody>
             {clients.map((client) => (
-              <tr key={client.id} className="border-b border-neutral-100 last:border-0">
+              <tr key={client.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
                 <td className="px-4 py-3">
                   <Link
                     href={`/clients/${client.id}`}
@@ -97,12 +109,33 @@ export default async function ClientsPage({
                 <td className="px-4 py-3 text-neutral-600">
                   {client.contactPerson ?? "—"}
                 </td>
-                <td className="px-4 py-3 text-neutral-600">{client.status}</td>
+                <td className="px-4 py-3 text-neutral-600 whitespace-nowrap">
+                  {client.phone ?? "—"}
+                </td>
+                <td className="px-4 py-3 text-neutral-600 truncate" title={client.email ?? undefined}>
+                  {client.email ?? "—"}
+                </td>
+                <td className="px-4 py-3 text-neutral-600">
+                  {client.location ?? "—"}
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`inline-block rounded-md px-2 py-0.5 text-xs font-medium ${
+                      client.status === "ACTIVE"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : client.status === "PAUSED"
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-neutral-100 text-neutral-500"
+                    }`}
+                  >
+                    {client.status}
+                  </span>
+                </td>
               </tr>
             ))}
             {clients.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-4 py-8 text-center text-neutral-400">
+                <td colSpan={6} className="px-4 py-8 text-center text-neutral-400">
                   {params.q || activeStatus
                     ? "No clients match this search."
                     : "No clients yet."}
