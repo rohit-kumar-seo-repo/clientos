@@ -4,17 +4,19 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ClientService,
+  ClientServiceCategory,
   ServiceTemplate,
   BillingPlan,
   BillingPeriod,
 } from "@/generated/prisma/client";
-import { updateServiceStatusAction, updateWorkStatusAction } from "@/app/(app)/clients/service-actions";
+import { updateServiceAction, updateServiceStatusAction, updateWorkStatusAction } from "@/app/(app)/clients/service-actions";
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 import { startOfUTCDay } from "@/lib/attention";
-import { AddServiceForm } from "./AddServiceForm";
+import { AddServiceForm, SERVICE_CATEGORIES } from "./AddServiceForm";
 
 type ServiceWithBilling = ClientService & {
   serviceTemplate: ServiceTemplate;
+  serviceCategories: ClientServiceCategory[];
   billingPlan:
     | (BillingPlan & { billingPeriods: BillingPeriod[] })
     | null;
@@ -71,6 +73,8 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
   const [markPaidError, setMarkPaidError] = useState<string | null>(null);
   const [showWorkForm, setShowWorkForm] = useState(false);
   const [workError, setWorkError] = useState<string | null>(null);
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const period = service.billingPlan?.billingPeriods[0];
   // billingPlan.amountInPaise is the current-price source of truth (see
@@ -100,6 +104,17 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
     router.refresh();
   }
 
+  async function handleServiceEdit(formData: FormData) {
+    const result = await updateServiceAction(service.id, formData);
+    if ("error" in result) {
+      setEditError(result.error);
+      return;
+    }
+    setEditError(null);
+    setShowEditForm(false);
+    router.refresh();
+  }
+
   async function handleMarkPaid(formData: FormData) {
     if (!period) return;
     const result = await markPaidAction(period.id, formData);
@@ -118,7 +133,16 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
         <span className="font-medium text-neutral-900">
           {service.serviceTemplate.name}
         </span>
-        <StatusBadge status={service.status} />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { setShowEditForm((v) => !v); setShowWorkForm(false); }}
+            className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+          >
+            {showEditForm ? "Close" : "Edit Service"}
+          </button>
+          <StatusBadge status={service.status} />
+        </div>
       </div>
       <div className="mt-1 text-neutral-600">
         ₹{feeInRupees} — {FREQUENCY_LABELS[service.billingPlan?.frequency ?? ""]}
@@ -251,6 +275,110 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
               type="button"
               onClick={() => setShowWorkForm(false)}
               className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {showEditForm && (
+        <form
+          action={handleServiceEdit}
+          className="mt-2 space-y-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3"
+        >
+          {editError && <p className="text-xs text-red-600">{editError}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`edit-fee-${service.id}`}>
+                Price (₹)
+              </label>
+              <input
+                id={`edit-fee-${service.id}`}
+                name="feeInRupees"
+                type="number"
+                required
+                defaultValue={(service.billingPlan?.amountInPaise ?? service.feeInPaise) / 100}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`edit-freq-${service.id}`}>
+                Billing frequency
+              </label>
+              <select
+                id={`edit-freq-${service.id}`}
+                name="frequency"
+                required
+                defaultValue={service.billingPlan?.frequency ?? "MONTHLY"}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              >
+                <option value="MONTHLY">Monthly</option>
+                <option value="QUARTERLY">Quarterly</option>
+                <option value="HALF_YEARLY">Half-yearly</option>
+                <option value="YEARLY">Yearly</option>
+                <option value="ONE_TIME">One-time</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`edit-day-${service.id}`}>
+                Billing day (1–28)
+              </label>
+              <input
+                id={`edit-day-${service.id}`}
+                name="billingDay"
+                type="number"
+                min={1}
+                max={28}
+                required
+                defaultValue={service.billingPlan?.billingDay ?? 1}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`edit-end-${service.id}`}>
+                End date (optional)
+              </label>
+              <input
+                id={`edit-end-${service.id}`}
+                name="endDate"
+                type="date"
+                defaultValue={service.endDate ? new Date(service.endDate).toISOString().slice(0, 10) : ""}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+          {/* Categories */}
+          <div>
+            <p className="mb-1.5 text-xs text-neutral-600">
+              Services Included{" "}
+              <span className="text-neutral-400">(select all that apply)</span>
+            </p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              {SERVICE_CATEGORIES.map((cat) => (
+                <label key={cat} className="flex items-center gap-2 text-xs text-neutral-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="categories"
+                    value={cat}
+                    defaultChecked={service.serviceCategories.some((c) => c.category === cat)}
+                    className="h-3.5 w-3.5 rounded border-neutral-300 accent-neutral-900"
+                  />
+                  {cat}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800"
+            >
+              Save Changes
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowEditForm(false)}
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
             >
               Cancel
             </button>

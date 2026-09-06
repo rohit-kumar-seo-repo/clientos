@@ -28,6 +28,7 @@ export async function getClientById(organizationId: number, clientId: number) {
         orderBy: { createdAt: "asc" },
         include: {
           serviceTemplate: true,
+          serviceCategories: true,
           billingPlan: {
             include: {
               billingPeriods: { orderBy: { periodLabel: "desc" }, take: 1 },

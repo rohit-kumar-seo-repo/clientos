@@ -130,28 +130,40 @@ export async function updateServiceAction(
     return { error: "End date is invalid." };
   }
 
-  await prisma.$transaction([
-    prisma.clientService.update({
+  // Categories: replace all existing tags atomically inside the transaction.
+  const categories = [
+    ...new Set(formData.getAll("categories").map(String).filter(Boolean)),
+  ];
+
+  await prisma.$transaction(async (tx) => {
+    await tx.clientService.update({
       where: { id: clientServiceId },
       data: { endDate },
-    }),
-    prisma.billingPlan.update({
+    });
+    await tx.billingPlan.update({
       where: { clientServiceId },
       data: {
         amountInPaise: feeInPaise,
         frequency: frequency as BillingFrequency,
         billingDay,
       },
-    }),
-    prisma.clientActivity.create({
+    });
+    // Replace categories: delete existing, insert new.
+    await tx.clientServiceCategory.deleteMany({ where: { clientServiceId } });
+    if (categories.length > 0) {
+      await tx.clientServiceCategory.createMany({
+        data: categories.map((category) => ({ clientServiceId, category })),
+      });
+    }
+    await tx.clientActivity.create({
       data: {
         clientId: clientService.clientId,
         actorAdminId: admin.id,
         eventType: "service.updated",
         summary: `Service updated: ₹${feeInRupees.toLocaleString("en-IN")} / ${frequency}, billing day ${billingDay}${endDate ? `, ends ${endDate.toISOString().slice(0, 10)}` : ""}.`,
       },
-    }),
-  ]);
+    });
+  });
 
   return { ok: true };
 }
