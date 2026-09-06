@@ -2,25 +2,27 @@ import Link from "next/link";
 import type { RecentActivityItem } from "@/lib/dashboard";
 
 const EVENT_LABELS: Record<string, string> = {
-  payment_recorded: "Payment recorded",
-  work_status_updated: "Work status updated",
-  service_created: "Service created",
-  service_paused: "Service paused",
-  service_reactivated: "Service reactivated",
-  service_cancelled: "Service cancelled",
-  client_created: "Client created",
-  service_edited: "Service edited",
+  "payment.recorded": "Payment recorded",
+  "service.work_updated": "Work status updated",
+  "service.added": "Service created",
+  "service.status_changed": "Service status changed",
+  "service.updated": "Service updated",
+  "client.created": "Client created",
+  "client.updated": "Client updated",
+  "contact.added": "Contact added",
+  "note.added": "Note added",
 };
 
 const EVENT_DOT_CLASS: Record<string, string> = {
-  payment_recorded: "bg-emerald-500",
-  work_status_updated: "bg-blue-400",
-  service_created: "bg-indigo-400",
-  service_paused: "bg-amber-400",
-  service_reactivated: "bg-emerald-400",
-  service_cancelled: "bg-neutral-400",
-  client_created: "bg-neutral-700",
-  service_edited: "bg-neutral-400",
+  "payment.recorded": "bg-emerald-500",
+  "service.work_updated": "bg-blue-400",
+  "service.added": "bg-indigo-400",
+  "service.status_changed": "bg-amber-400",
+  "service.updated": "bg-neutral-400",
+  "client.created": "bg-neutral-700",
+  "client.updated": "bg-neutral-400",
+  "contact.added": "bg-neutral-400",
+  "note.added": "bg-neutral-400",
 };
 
 function timeAgo(date: Date): string {
@@ -62,7 +64,7 @@ export function RecentActivity({ items }: { items: RecentActivityItem[] }) {
               EVENT_DOT_CLASS[item.eventType] ?? "bg-neutral-300";
             const label =
               EVENT_LABELS[item.eventType] ??
-              item.eventType.replace(/_/g, " ");
+              item.eventType.replace(/[._]/g, " ");
             return (
               <li key={item.id} className="flex items-start gap-3 px-4 py-3">
                 <span

@@ -23,7 +23,7 @@ export function UpcomingRenewals({
     .filter((s) => {
       if (!s.endDate) return false;
       const days = daysUntil(s.endDate, todayMs);
-      return days >= 0 && days <= 60;
+      return days >= 0 && days <= 30;
     })
     .sort((a, b) => a.endDate!.getTime() - b.endDate!.getTime());
 
@@ -41,7 +41,7 @@ export function UpcomingRenewals({
 
       {renewals.length === 0 ? (
         <p className="px-4 py-8 text-center text-xs text-neutral-400">
-          No renewals due in the next 60 days.
+          No renewals due in the next 30 days.
         </p>
       ) : (
         <ul className="divide-y divide-neutral-100">

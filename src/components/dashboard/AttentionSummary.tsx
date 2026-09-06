@@ -61,7 +61,7 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
         <p className="mb-2 text-xs font-medium text-neutral-500">Work Attention</p>
         <p className="text-2xl font-semibold text-indigo-600">{workAttention.length}</p>
         <p className="mt-1 text-xs text-neutral-400">
-          {workAttention.length === 1 ? "service" : "services"} overdue
+          {workAttention.length === 1 ? "service" : "services"} need attention
         </p>
       </div>
 
