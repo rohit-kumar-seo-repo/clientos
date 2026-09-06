@@ -39,3 +39,10 @@ export async function getClientById(organizationId: number, clientId: number) {
   });
   return client;
 }
+
+export async function getPaymentHistoryForClient(clientId: number) {
+  return prisma.payment.findMany({
+    where: { invoice: { clientId } },
+    orderBy: { createdAt: "desc" },
+  });
+}

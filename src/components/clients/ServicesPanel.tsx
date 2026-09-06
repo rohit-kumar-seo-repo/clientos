@@ -27,6 +27,13 @@ const FREQUENCY_LABELS: Record<string, string> = {
   ONE_TIME: "One-time",
 };
 
+function isWithin30Days(date: Date): boolean {
+  const now = new Date();
+  const diffMs = new Date(date).getTime() - now.getTime();
+  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+  return diffDays >= 0 && diffDays <= 30;
+}
+
 export function ServicesPanel({
   clientId,
   services,
@@ -122,6 +129,17 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
           </>
         )}
       </div>
+      {service.endDate && (
+        <div className="mt-1 text-neutral-500">
+          {isWithin30Days(service.endDate) ? (
+            <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+              Renewal due {new Date(service.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+            </span>
+          ) : (
+            <>Ends {new Date(service.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</>
+          )}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setShowWorkForm((v) => !v)}

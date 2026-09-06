@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/require-admin";
-import { getClientById } from "@/lib/clients";
+import { getClientById, getPaymentHistoryForClient } from "@/lib/clients";
 import { ActivityTimeline } from "@/components/clients/ActivityTimeline";
 import { ServicesPanel } from "@/components/clients/ServicesPanel";
 import { ContactsPanel } from "@/components/clients/ContactsPanel";
 import { NotesPanel } from "@/components/clients/NotesPanel";
+import { PaymentHistoryPanel } from "@/components/clients/PaymentHistoryPanel";
 
 export default async function ClientDetailPage({
   params,
@@ -28,6 +29,8 @@ export default async function ClientDetailPage({
   if (!client) {
     notFound();
   }
+
+  const payments = await getPaymentHistoryForClient(clientId);
 
   return (
     <div>
@@ -64,6 +67,10 @@ export default async function ClientDetailPage({
 
         <div className="col-span-2">
           <ServicesPanel clientId={client.id} services={client.services} />
+        </div>
+
+        <div className="col-span-2">
+          <PaymentHistoryPanel payments={payments} />
         </div>
 
         <div className="col-span-2">
