@@ -151,72 +151,81 @@ function AttentionRow({
   }
 
   return (
-    <tr className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-      <td className="px-3 py-3 text-xs text-neutral-400">{rowNum}</td>
-      <td className="px-3 py-3 font-medium text-neutral-900 truncate">
-        <Link href={`/clients/${service.clientId}`} className="hover:underline" title={service.clientName}>
-          {service.clientName}
-        </Link>
-      </td>
-      <td className="px-3 py-3 text-neutral-700 truncate" title={service.serviceName}>{service.serviceName}</td>
-      <td className="px-3 py-3">
-        <span className={`inline-block rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
-          {label}
-        </span>
-      </td>
-      <td className="px-3 py-3 text-neutral-900 font-medium">
-        {service.outstandingAmountInPaise > 0
-          ? `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
-          : <span className="text-neutral-400">—</span>}
-      </td>
-      <td className="px-3 py-3 text-neutral-600 whitespace-nowrap">
-        {period
-          ? new Date(period.dueDate).toLocaleDateString("en-IN", {
-              day: "numeric",
-              month: "short",
-              year: "numeric",
-            })
-          : <span className="text-neutral-400">—</span>}
-      </td>
-      <td className="px-3 py-3">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {hasPaymentAction && (
-            <button
-              type="button"
-              onClick={() => setShowMarkPaid((v) => !v)}
-              className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700"
-            >
-              Mark Paid
-            </button>
-          )}
-          {!hasPaymentAction && (
-            <Link
-              href={`/clients/${service.clientId}`}
-              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
-            >
-              Update
-            </Link>
-          )}
-          {hasPaymentAction && (
-            <Link
-              href={`/clients/${service.clientId}`}
-              className="text-xs text-neutral-400 hover:text-neutral-900"
-            >
-              View
-            </Link>
-          )}
-        </div>
-        {showMarkPaid && (
-          <MarkPaidInlineForm
-            clientServiceId={service.clientServiceId}
-            amountInPaise={period?.amountInPaise ?? 0}
-            onSubmit={handleMarkPaid}
-            error={error}
-            onCancel={() => setShowMarkPaid(false)}
-          />
-        )}
-      </td>
-    </tr>
+    <>
+      {/* ── Data row — always fixed height, never distorted ── */}
+      <tr className={`border-b ${showMarkPaid ? "border-neutral-200" : "border-neutral-100 last:border-0"} hover:bg-neutral-50`}>
+        <td className="px-3 py-3 text-xs text-neutral-400">{rowNum}</td>
+        <td className="px-3 py-3 font-medium text-neutral-900 truncate">
+          <Link href={`/clients/${service.clientId}`} className="hover:underline" title={service.clientName}>
+            {service.clientName}
+          </Link>
+        </td>
+        <td className="px-3 py-3 text-neutral-700 truncate" title={service.serviceName}>{service.serviceName}</td>
+        <td className="px-3 py-3">
+          <span className={`inline-block rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
+            {label}
+          </span>
+        </td>
+        <td className="px-3 py-3 text-neutral-900 font-medium">
+          {service.outstandingAmountInPaise > 0
+            ? `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
+            : <span className="text-neutral-400">—</span>}
+        </td>
+        <td className="px-3 py-3 text-neutral-600 whitespace-nowrap">
+          {period
+            ? new Date(period.dueDate).toLocaleDateString("en-IN", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })
+            : <span className="text-neutral-400">—</span>}
+        </td>
+        <td className="px-3 py-3">
+          <div className="flex items-center gap-1.5">
+            {hasPaymentAction && (
+              <button
+                type="button"
+                onClick={() => setShowMarkPaid((v) => !v)}
+                className={`rounded-lg px-3 py-1.5 text-xs text-white ${showMarkPaid ? "bg-neutral-500 hover:bg-neutral-600" : "bg-neutral-900 hover:bg-neutral-700"}`}
+              >
+                {showMarkPaid ? "Cancel" : "Mark Paid"}
+              </button>
+            )}
+            {!hasPaymentAction && (
+              <Link
+                href={`/clients/${service.clientId}`}
+                className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
+              >
+                Update
+              </Link>
+            )}
+            {hasPaymentAction && !showMarkPaid && (
+              <Link
+                href={`/clients/${service.clientId}`}
+                className="text-xs text-neutral-400 hover:text-neutral-900"
+              >
+                View
+              </Link>
+            )}
+          </div>
+        </td>
+      </tr>
+
+      {/* ── Form row — spans all columns, no layout distortion ── */}
+      {showMarkPaid && (
+        <tr className="border-b border-neutral-100 last:border-0 bg-neutral-50">
+          <td colSpan={7} className="px-4 py-3">
+            <MarkPaidInlineForm
+              clientServiceId={service.clientServiceId}
+              amountInPaise={period?.amountInPaise ?? 0}
+              onSubmit={handleMarkPaid}
+              error={error}
+              onCancel={() => setShowMarkPaid(false)}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -235,7 +244,7 @@ function MarkPaidInlineForm({
   return (
     <form
       action={onSubmit}
-      className="mt-2 flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-2"
+      className="flex items-end gap-4"
     >
       {error && <p className="text-xs text-red-600">{error}</p>}
       <label className="flex flex-col gap-1">
@@ -245,34 +254,32 @@ function MarkPaidInlineForm({
           type="number"
           defaultValue={amountInPaise / 100}
           required
-          className="w-24 rounded border border-neutral-300 px-2 py-1 text-xs"
+          className="w-28 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs text-neutral-500">Date</span>
+        <span className="text-xs text-neutral-500">Payment date</span>
         <input
           name="paidAt"
           type="date"
           defaultValue={new Date().toISOString().slice(0, 10)}
           required
-          className="rounded border border-neutral-300 px-2 py-1 text-xs"
+          className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
         />
       </label>
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          className="rounded bg-neutral-900 px-2 py-1 text-xs text-white"
-        >
-          Confirm
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border border-neutral-300 px-2 py-1 text-xs"
-        >
-          Cancel
-        </button>
-      </div>
+      <button
+        type="submit"
+        className="rounded-lg bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+      >
+        Confirm Payment
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="text-xs text-neutral-400 hover:text-neutral-900"
+      >
+        Cancel
+      </button>
     </form>
   );
 }
