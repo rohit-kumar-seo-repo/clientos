@@ -39,30 +39,32 @@ export function ClientAttentionList({ services }: { services: RankedService[] })
         <h2 className="text-sm font-medium text-neutral-900">Clients Requiring Attention</h2>
         <span className="text-xs text-neutral-400">Sorted by priority</span>
       </div>
-      <table className="w-full text-sm">
-        <thead className="border-b border-neutral-200 text-left text-neutral-500">
-          <tr>
-            <th className="px-4 py-3 font-medium">Client</th>
-            <th className="px-4 py-3 font-medium">Service</th>
-            <th className="px-4 py-3 font-medium">Payment</th>
-            <th className="px-4 py-3 font-medium">Work Status</th>
-            <th className="px-4 py-3 font-medium">Due Date</th>
-            <th className="px-4 py-3 font-medium">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((service) => (
-            <AttentionRow key={service.clientServiceId} service={service} />
-          ))}
-          {visible.length === 0 && (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
-              <td colSpan={6} className="px-4 py-8 text-center text-neutral-400">
-                Nothing needs attention right now.
-              </td>
+              <th className="px-4 py-3 font-medium">Client</th>
+              <th className="px-4 py-3 font-medium">Service</th>
+              <th className="px-4 py-3 font-medium">Payment</th>
+              <th className="px-4 py-3 font-medium">Work Status</th>
+              <th className="px-4 py-3 font-medium">Due Date</th>
+              <th className="px-4 py-3 font-medium">Action</th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {visible.map((service) => (
+              <AttentionRow key={service.clientServiceId} service={service} />
+            ))}
+            {visible.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-neutral-400">
+                  Nothing needs attention right now.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -162,20 +164,26 @@ function MarkPaidInlineForm({
   return (
     <form action={onSubmit} className="mt-2 flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-2">
       {error && <p className="text-xs text-red-600">{error}</p>}
-      <input
-        name="amountInRupees"
-        type="number"
-        defaultValue={amountInPaise / 100}
-        required
-        className="w-24 rounded border border-neutral-300 px-2 py-1 text-xs"
-      />
-      <input
-        name="paidAt"
-        type="date"
-        defaultValue={new Date().toISOString().slice(0, 10)}
-        required
-        className="rounded border border-neutral-300 px-2 py-1 text-xs"
-      />
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-neutral-500">Amount (₹)</span>
+        <input
+          name="amountInRupees"
+          type="number"
+          defaultValue={amountInPaise / 100}
+          required
+          className="w-24 rounded border border-neutral-300 px-2 py-1 text-xs"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-neutral-500">Date</span>
+        <input
+          name="paidAt"
+          type="date"
+          defaultValue={new Date().toISOString().slice(0, 10)}
+          required
+          className="rounded border border-neutral-300 px-2 py-1 text-xs"
+        />
+      </label>
       <div className="flex gap-2">
         <button type="submit" className="rounded bg-neutral-900 px-2 py-1 text-xs text-white">
           Confirm
