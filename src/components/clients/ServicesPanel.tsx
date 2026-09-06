@@ -8,7 +8,7 @@ import type {
   BillingPlan,
   BillingPeriod,
 } from "@/generated/prisma/client";
-import { updateServiceStatusAction } from "@/app/(app)/clients/service-actions";
+import { updateServiceStatusAction, updateWorkStatusAction } from "@/app/(app)/clients/service-actions";
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 import { AddServiceForm } from "./AddServiceForm";
 
@@ -57,6 +57,8 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
   const [isPending, startTransition] = useTransition();
   const [showMarkPaid, setShowMarkPaid] = useState(false);
   const [markPaidError, setMarkPaidError] = useState<string | null>(null);
+  const [showWorkForm, setShowWorkForm] = useState(false);
+  const [workError, setWorkError] = useState<string | null>(null);
 
   const period = service.billingPlan?.billingPeriods[0];
   // billingPlan.amountInPaise is the current-price source of truth (see
@@ -73,6 +75,17 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
       await updateServiceStatusAction(service.id, next);
       router.refresh();
     });
+  }
+
+  async function handleWorkUpdate(formData: FormData) {
+    const result = await updateWorkStatusAction(service.id, formData);
+    if ("error" in result) {
+      setWorkError(result.error);
+      return;
+    }
+    setWorkError(null);
+    setShowWorkForm(false);
+    router.refresh();
   }
 
   async function handleMarkPaid(formData: FormData) {
@@ -109,10 +122,108 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
           </>
         )}
       </div>
-      <div className="mt-1 text-neutral-500">
+      <button
+        type="button"
+        onClick={() => setShowWorkForm((v) => !v)}
+        className="mt-1 block text-neutral-500 hover:text-neutral-900"
+      >
         Work: {service.workStatus.replace("_", " ")}
         {service.progressPercent != null && ` — ${service.progressPercent}%`}
-      </div>
+        {service.workNote && ` · ${service.workNote}`}
+      </button>
+      {showWorkForm && (
+        <form
+          action={handleWorkUpdate}
+          className="mt-2 space-y-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3"
+        >
+          {workError && <p className="text-xs text-red-600">{workError}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`status-${service.id}`}>
+                Status
+              </label>
+              <select
+                id={`status-${service.id}`}
+                name="workStatus"
+                defaultValue={service.workStatus}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              >
+                <option value="NOT_STARTED">Not Started</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="ON_HOLD">On Hold</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`progress-${service.id}`}>
+                Progress %
+              </label>
+              <input
+                id={`progress-${service.id}`}
+                name="progressPercent"
+                type="number"
+                min={0}
+                max={100}
+                defaultValue={service.progressPercent ?? ""}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-neutral-600" htmlFor={`note-${service.id}`}>
+              Current note
+            </label>
+            <input
+              id={`note-${service.id}`}
+              name="workNote"
+              type="text"
+              defaultValue={service.workNote ?? ""}
+              className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`next-note-${service.id}`}>
+                Next action
+              </label>
+              <input
+                id={`next-note-${service.id}`}
+                name="nextActionNote"
+                type="text"
+                defaultValue={service.nextActionNote ?? ""}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600" htmlFor={`next-date-${service.id}`}>
+                Next action date
+              </label>
+              <input
+                id={`next-date-${service.id}`}
+                name="nextActionDate"
+                type="date"
+                defaultValue={service.nextActionDate ? new Date(service.nextActionDate).toISOString().slice(0, 10) : ""}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowWorkForm(false)}
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
       {service.status !== "CANCELLED" && (
         <div className="mt-2 flex gap-3 text-xs">
           {service.status === "ACTIVE" ? (
