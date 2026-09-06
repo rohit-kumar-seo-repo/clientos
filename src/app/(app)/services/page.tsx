@@ -189,16 +189,18 @@ export default async function ServicesPage({
   // Group active services by service category. A service tagged with multiple
   // categories contributes +1 to each. Services with no categories fall back
   // to the template name so they still appear in the summary.
-  type CategorySummary = { name: string; count: number; clientServiceIds: number[] };
+  type CategorySummary = { name: string; count: number; totalPaise: number; clientServiceIds: number[] };
   const byCategory = Object.values(
     active.reduce<Record<string, CategorySummary>>((acc, s) => {
       const tags =
         s.serviceCategories.length > 0
           ? s.serviceCategories.map((c) => c.category)
           : [s.serviceTemplate.name]; // fallback: untagged services show under their template name
+      const paise = s.billingPlan?.amountInPaise ?? s.feeInPaise;
       for (const tag of tags) {
-        if (!acc[tag]) acc[tag] = { name: tag, count: 0, clientServiceIds: [] };
+        if (!acc[tag]) acc[tag] = { name: tag, count: 0, totalPaise: 0, clientServiceIds: [] };
         acc[tag].count++;
+        acc[tag].totalPaise += paise;
         acc[tag].clientServiceIds.push(s.id);
       }
       return acc;
@@ -228,44 +230,36 @@ export default async function ServicesPage({
         </div>
       ) : (
         <div className="space-y-6">
-          {/* ── Active clients by service category ── */}
+          {/* ── Active services by category — card grid ── */}
           {byCategory.length > 0 && (
-            <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
-              <div className="border-b border-neutral-200 px-4 py-3">
-                <h2 className="text-sm font-medium text-neutral-900">
-                  Active Clients by Service
-                </h2>
-                <p className="mt-0.5 text-xs text-neutral-400">
-                  ACTIVE services only · a package counts under each included service · click to see clients
-                </p>
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-medium text-neutral-900">Active Services</h2>
+                  <p className="mt-0.5 text-xs text-neutral-400">
+                    {active.length} active service{active.length !== 1 ? "s" : ""} across{" "}
+                    {new Set(active.map((s) => s.clientId)).size} client
+                    {new Set(active.map((s) => s.clientId)).size !== 1 ? "s" : ""} · click a card to see clients
+                  </p>
+                </div>
               </div>
-              <ul className="divide-y divide-neutral-100">
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
                 {byCategory.map((cat) => (
-                  <li key={cat.name}>
-                    <Link
-                      href={`/services?category=${encodeURIComponent(cat.name)}`}
-                      className="flex items-center justify-between px-4 py-3 hover:bg-neutral-50"
-                    >
-                      <span className="text-sm font-medium text-neutral-900">
-                        {cat.name}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        <span className="text-sm text-neutral-600">
-                          {cat.count}{" "}
-                          {cat.count === 1 ? "client" : "clients"}
-                        </span>
-                        <span className="text-xs text-neutral-300">→</span>
-                      </span>
-                    </Link>
-                  </li>
+                  <Link
+                    key={cat.name}
+                    href={`/services?category=${encodeURIComponent(cat.name)}`}
+                    className="rounded-xl border border-neutral-200 bg-white p-4 hover:border-neutral-300 hover:shadow-sm transition-all"
+                  >
+                    <p className="mb-2 text-xs font-medium text-neutral-500 truncate" title={cat.name}>
+                      {cat.name}
+                    </p>
+                    <p className="text-2xl font-semibold text-neutral-900">{cat.count}</p>
+                    <p className="mt-1 text-xs text-neutral-400">
+                      {cat.count === 1 ? "client" : "clients"} &middot;{" "}
+                      ₹{(cat.totalPaise / 100).toLocaleString("en-IN")}/mo
+                    </p>
+                  </Link>
                 ))}
-              </ul>
-              <div className="border-t border-neutral-100 px-4 py-2.5">
-                <p className="text-xs text-neutral-400">
-                  {active.length} active service{active.length !== 1 ? "s" : ""} across{" "}
-                  {new Set(active.map((s) => s.clientId)).size} client
-                  {new Set(active.map((s) => s.clientId)).size !== 1 ? "s" : ""}
-                </p>
               </div>
             </div>
           )}
