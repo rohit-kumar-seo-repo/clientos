@@ -4,6 +4,16 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createServiceAction } from "@/app/(app)/clients/service-actions";
 
+export const SERVICE_CATEGORIES = [
+  "Google Ads",
+  "Local SEO",
+  "Website SEO",
+  "Social Media Management",
+  "Website Development",
+  "Automation",
+  "Other/Custom",
+] as const;
+
 const FREQUENCY_OPTIONS = [
   { value: "MONTHLY", label: "Monthly" },
   { value: "QUARTERLY", label: "Quarterly" },
@@ -67,6 +77,28 @@ export function AddServiceForm({ clientId }: { clientId: number }) {
         <Field name="startDate" label="Start date" type="date" required />
         <Field name="endDate" label="End date (optional)" type="date" />
       </div>
+
+      {/* Services Included — multi-select checkboxes */}
+      <div>
+        <p className="mb-2 text-sm text-neutral-600">
+          Services Included{" "}
+          <span className="text-neutral-400">(select all that apply)</span>
+        </p>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          {SERVICE_CATEGORIES.map((cat) => (
+            <label key={cat} className="flex items-center gap-2 text-sm text-neutral-700 cursor-pointer">
+              <input
+                type="checkbox"
+                name="categories"
+                value={cat}
+                className="h-4 w-4 rounded border-neutral-300 accent-neutral-900"
+              />
+              {cat}
+            </label>
+          ))}
+        </div>
+      </div>
+
       <div className="flex gap-2">
         <button
           type="submit"

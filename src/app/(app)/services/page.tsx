@@ -33,17 +33,18 @@ const WORK_STATUS_COLORS: Record<string, string> = {
 export default async function ServicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ service?: string }>;
+  searchParams: Promise<{ category?: string }>;
 }) {
   const admin = await requireAdmin();
   const params = await searchParams;
-  const filterTemplateId = params.service ? parseInt(params.service, 10) : null;
+  const filterCategory = params.category?.trim() || null;
 
   const services = await prisma.clientService.findMany({
     where: { client: { organizationId: admin.organizationId } },
     include: {
       client: true,
       serviceTemplate: true,
+      serviceCategories: true,
       billingPlan: {
         include: {
           billingPeriods: {
@@ -76,16 +77,16 @@ export default async function ServicesPage({
     return `₹${(paise / 100).toLocaleString("en-IN")}`;
   }
 
-  // ── Filtered single-service view ─────────────────────────────────────────
-  if (filterTemplateId && !isNaN(filterTemplateId)) {
-    const filtered = active.filter(
-      (s) => s.serviceTemplate.id === filterTemplateId
+  // ── Filtered by-category view ─────────────────────────────────────────────
+  if (filterCategory) {
+    // A service matches if any of its categories equals filterCategory,
+    // OR (for untagged services) its template name equals filterCategory.
+    const filtered = active.filter((s) =>
+      s.serviceCategories.length > 0
+        ? s.serviceCategories.some((c) => c.category === filterCategory)
+        : s.serviceTemplate.name === filterCategory
     );
-    const templateName =
-      filtered[0]?.serviceTemplate.name ??
-      services.find((s) => s.serviceTemplate.id === filterTemplateId)
-        ?.serviceTemplate.name ??
-      "Service";
+    const templateName = filterCategory;
 
     return (
       <div>
@@ -107,7 +108,7 @@ export default async function ServicesPage({
 
         {filtered.length === 0 ? (
           <div className="rounded-xl border border-neutral-200 bg-white p-10 text-center text-sm text-neutral-400">
-            No active clients for this service.
+            No active clients tagged with this service category.
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
@@ -185,14 +186,21 @@ export default async function ServicesPage({
 
   // ── Default view ─────────────────────────────────────────────────────────
 
-  // Group active services by template, sorted descending by count
-  type TemplateSummary = { id: number; name: string; count: number };
-  const byTemplate = Object.values(
-    active.reduce<Record<number, TemplateSummary>>((acc, s) => {
-      const id = s.serviceTemplate.id;
-      if (!acc[id])
-        acc[id] = { id, name: s.serviceTemplate.name, count: 0 };
-      acc[id].count++;
+  // Group active services by service category. A service tagged with multiple
+  // categories contributes +1 to each. Services with no categories fall back
+  // to the template name so they still appear in the summary.
+  type CategorySummary = { name: string; count: number; clientServiceIds: number[] };
+  const byCategory = Object.values(
+    active.reduce<Record<string, CategorySummary>>((acc, s) => {
+      const tags =
+        s.serviceCategories.length > 0
+          ? s.serviceCategories.map((c) => c.category)
+          : [s.serviceTemplate.name]; // fallback: untagged services show under their template name
+      for (const tag of tags) {
+        if (!acc[tag]) acc[tag] = { name: tag, count: 0, clientServiceIds: [] };
+        acc[tag].count++;
+        acc[tag].clientServiceIds.push(s.id);
+      }
       return acc;
     }, {})
   ).sort((a, b) => b.count - a.count);
@@ -220,31 +228,31 @@ export default async function ServicesPage({
         </div>
       ) : (
         <div className="space-y-6">
-          {/* ── Active clients by service summary ── */}
-          {byTemplate.length > 0 && (
+          {/* ── Active clients by service category ── */}
+          {byCategory.length > 0 && (
             <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
               <div className="border-b border-neutral-200 px-4 py-3">
                 <h2 className="text-sm font-medium text-neutral-900">
                   Active Clients by Service
                 </h2>
                 <p className="mt-0.5 text-xs text-neutral-400">
-                  ACTIVE services only · click a row to see client details
+                  ACTIVE services only · a package counts under each included service · click to see clients
                 </p>
               </div>
               <ul className="divide-y divide-neutral-100">
-                {byTemplate.map((t) => (
-                  <li key={t.id}>
+                {byCategory.map((cat) => (
+                  <li key={cat.name}>
                     <Link
-                      href={`/services?service=${t.id}`}
+                      href={`/services?category=${encodeURIComponent(cat.name)}`}
                       className="flex items-center justify-between px-4 py-3 hover:bg-neutral-50"
                     >
                       <span className="text-sm font-medium text-neutral-900">
-                        {t.name}
+                        {cat.name}
                       </span>
                       <span className="flex items-center gap-2">
                         <span className="text-sm text-neutral-600">
-                          {t.count}{" "}
-                          {t.count === 1 ? "client" : "clients"}
+                          {cat.count}{" "}
+                          {cat.count === 1 ? "client" : "clients"}
                         </span>
                         <span className="text-xs text-neutral-300">→</span>
                       </span>
@@ -252,7 +260,6 @@ export default async function ServicesPage({
                   </li>
                 ))}
               </ul>
-              {/* Total active */}
               <div className="border-t border-neutral-100 px-4 py-2.5">
                 <p className="text-xs text-neutral-400">
                   {active.length} active service{active.length !== 1 ? "s" : ""} across{" "}

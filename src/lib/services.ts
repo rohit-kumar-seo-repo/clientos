@@ -31,6 +31,8 @@ export type CreateClientServiceInput = {
   billingDay: number;
   startDate: Date;
   endDate: Date | null;
+  /** Service-category tags (e.g. ["Google Ads", "Local SEO"]). Zero or more. */
+  categories?: string[];
 };
 
 /**
@@ -89,6 +91,19 @@ export async function createClientService(input: CreateClientServiceInput) {
         dueDate: dueDateForPeriod(periodLabel, input.billingDay),
       },
     });
+
+    // Write category tags. Deduped and trimmed; silently skipped if empty.
+    const categories = [
+      ...new Set((input.categories ?? []).map((c) => c.trim()).filter(Boolean)),
+    ];
+    if (categories.length > 0) {
+      await tx.clientServiceCategory.createMany({
+        data: categories.map((category) => ({
+          clientServiceId: service.id,
+          category,
+        })),
+      });
+    }
 
     return service;
   });

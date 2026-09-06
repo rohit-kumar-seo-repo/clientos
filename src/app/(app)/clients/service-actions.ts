@@ -68,6 +68,9 @@ export async function createServiceAction(
     return { error: "End date is invalid." };
   }
 
+  // Multi-value: FormData.getAll("categories") returns every checked value.
+  const categories = formData.getAll("categories").map(String).filter(Boolean);
+
   const service = await createClientService({
     clientId,
     serviceName,
@@ -76,6 +79,7 @@ export async function createServiceAction(
     billingDay,
     startDate,
     endDate,
+    categories,
   });
 
   const { admin } = await requireClientInOwnOrg(clientId);

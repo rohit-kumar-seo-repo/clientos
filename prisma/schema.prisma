@@ -390,13 +390,31 @@ model ClientService {
   client          Client          @relation(fields: [clientId], references: [id])
   serviceTemplate ServiceTemplate @relation(fields: [serviceTemplateId], references: [id])
 
-  billingPlan   BillingPlan?
-  taskInstances TaskInstance[]
-  reminderRules ReminderRule[]
+  billingPlan       BillingPlan?
+  taskInstances     TaskInstance[]
+  reminderRules     ReminderRule[]
+  serviceCategories ClientServiceCategory[]
 
   @@index([clientId])
   @@index([serviceTemplateId])
   @@map("client_services")
+}
+
+// Service-category tags on a ClientService. A package like
+// "Google Ads + SEO Growth Package" can be tagged [Google Ads, Website SEO,
+// Local SEO] so the Services page counts it under each category individually
+// while the billing obligation stays a single ClientService / BillingPlan.
+model ClientServiceCategory {
+  id              Int      @id @default(autoincrement())
+  clientServiceId Int
+  category        String   @db.VarChar(100)
+  createdAt       DateTime @default(now())
+
+  clientService ClientService @relation(fields: [clientServiceId], references: [id], onDelete: Cascade)
+
+  @@index([clientServiceId])
+  @@index([category])
+  @@map("client_service_categories")
 }
 
 // Generated per period from ServiceTemplateTask; a completed September
