@@ -91,7 +91,7 @@ describe("markPaidAction", () => {
 
     const result = await markPaidAction(period.id, form);
 
-    expect(result).toEqual({ error: "Amount must be greater than zero." });
+    expect(result).toEqual({ error: "Amount must be between ₹0.01 and ₹1,00,00,000." });
   });
 
   it("rejects an invalid date", async () => {

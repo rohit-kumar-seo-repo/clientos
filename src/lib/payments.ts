@@ -39,6 +39,18 @@ export async function markBillingPeriodPaid(
   input: MarkPaidInput
 ): Promise<MarkPaidResult> {
   return prisma.$transaction(async (tx) => {
+    // Atomic check-and-claim: acquires an InnoDB row lock so the losing
+    // concurrent transaction sees count === 0 and returns already_paid
+    // rather than racing past a non-locking snapshot read.
+    const claimed = await tx.billingPeriod.updateMany({
+      where: { id: input.billingPeriodId, status: { not: "PAID" } },
+      data: { status: "PAID" },
+    });
+    if (claimed.count === 0) {
+      return { error: "already_paid" as const };
+    }
+
+    // Fetch full period now that we hold the lock and have set status=PAID.
     const period = await tx.billingPeriod.findUniqueOrThrow({
       where: { id: input.billingPeriodId },
       include: {
@@ -46,10 +58,6 @@ export async function markBillingPeriodPaid(
         invoiceLineItem: { include: { invoice: true } },
       },
     });
-
-    if (period.status === "PAID") {
-      return { error: "already_paid" as const };
-    }
 
     let invoice: Invoice;
     if (period.invoiceLineItem) {
@@ -88,10 +96,7 @@ export async function markBillingPeriodPaid(
     });
 
     await tx.invoice.update({ where: { id: invoice.id }, data: { status: "PAID" } });
-    const paidPeriod = await tx.billingPeriod.update({
-      where: { id: period.id },
-      data: { status: "PAID" },
-    });
+    // BillingPeriod status was already set to PAID by the atomic updateMany above.
 
     // A paused/cancelled service must never accrue a future obligation —
     // this only matters when its last lingering unpaid period gets settled
@@ -112,6 +117,6 @@ export async function markBillingPeriodPaid(
       });
     }
 
-    return { invoice, period: paidPeriod };
+    return { invoice, period };
   });
 }

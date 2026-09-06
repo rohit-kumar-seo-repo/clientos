@@ -203,6 +203,11 @@ export async function updateWorkStatusAction(
   clientServiceId: number,
   formData: FormData
 ): Promise<{ error: string } | { ok: true }> {
+  // M1: Reject non-integer IDs before any DB call (matches sibling actions)
+  if (!Number.isInteger(clientServiceId)) {
+    return { error: "Service not found." };
+  }
+
   const { admin, clientService } = await requireClientServiceInOwnOrg(clientServiceId);
   if (!clientService) {
     return { error: "Service not found." };
@@ -223,23 +228,31 @@ export async function updateWorkStatusAction(
     progressPercent = Math.round(parsed);
   }
 
-  const workNote = optionalString(formData, "workNote");
-  const nextActionNote = optionalString(formData, "nextActionNote");
-  const nextActionDateRaw = String(formData.get("nextActionDate") ?? "").trim();
-  const nextActionDate = nextActionDateRaw ? new Date(nextActionDateRaw) : null;
-  if (nextActionDate && Number.isNaN(nextActionDate.getTime())) {
-    return { error: "Next action date is invalid." };
+  // I3: Only include optional fields when the form actually submitted them.
+  // Without formData.has() guards, an absent field would overwrite the DB
+  // column with null — a partial update (e.g. status-only) would silently
+  // erase existing notes. This also future-proofs for non-full-form callers
+  // (Plan 3+ quick-toggle UI).
+  const updateData: Record<string, unknown> = {
+    workStatus: workStatus as WorkStatus,
+    progressPercent,
+  };
+  if (formData.has("workNote")) updateData.workNote = optionalString(formData, "workNote");
+  if (formData.has("nextActionNote")) updateData.nextActionNote = optionalString(formData, "nextActionNote");
+
+  let nextActionDate: Date | null | undefined;
+  if (formData.has("nextActionDate")) {
+    const raw = String(formData.get("nextActionDate") ?? "").trim();
+    nextActionDate = raw ? new Date(raw) : null;
+    if (nextActionDate && Number.isNaN(nextActionDate.getTime())) {
+      return { error: "Next action date is invalid." };
+    }
+    updateData.nextActionDate = nextActionDate;
   }
 
   await prisma.clientService.update({
     where: { id: clientServiceId },
-    data: {
-      workStatus: workStatus as WorkStatus,
-      progressPercent,
-      workNote,
-      nextActionNote,
-      nextActionDate,
-    },
+    data: updateData,
   });
 
   if (workStatus !== clientService.workStatus) {
