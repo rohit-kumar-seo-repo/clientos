@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/db";
 import { requireClientInOwnOrg, requireClientServiceInOwnOrg } from "@/lib/authz";
 import { createClientService } from "@/lib/services";
-import type { BillingFrequency } from "@/generated/prisma/client";
+import type { BillingFrequency, WorkStatus } from "@/generated/prisma/client";
 import { ServiceStatus } from "@/generated/prisma/client";
 
 const VALID_FREQUENCIES: BillingFrequency[] = [
@@ -152,6 +152,11 @@ export async function updateServiceAction(
   return { ok: true };
 }
 
+function optionalString(formData: FormData, key: string): string | null {
+  const value = String(formData.get(key) ?? "").trim();
+  return value || null;
+}
+
 export async function updateServiceStatusAction(
   clientServiceId: number,
   status: ServiceStatus
@@ -183,6 +188,70 @@ export async function updateServiceStatusAction(
       },
     }),
   ]);
+
+  return { ok: true };
+}
+
+const VALID_WORK_STATUSES: WorkStatus[] = [
+  "NOT_STARTED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "ON_HOLD",
+];
+
+export async function updateWorkStatusAction(
+  clientServiceId: number,
+  formData: FormData
+): Promise<{ error: string } | { ok: true }> {
+  const { admin, clientService } = await requireClientServiceInOwnOrg(clientServiceId);
+  if (!clientService) {
+    return { error: "Service not found." };
+  }
+
+  const workStatus = String(formData.get("workStatus") ?? "").trim();
+  if (!VALID_WORK_STATUSES.includes(workStatus as WorkStatus)) {
+    return { error: "Invalid work status." };
+  }
+
+  const progressRaw = String(formData.get("progressPercent") ?? "").trim();
+  let progressPercent: number | null = null;
+  if (progressRaw) {
+    const parsed = Number(progressRaw);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      return { error: "Progress must be between 0 and 100." };
+    }
+    progressPercent = Math.round(parsed);
+  }
+
+  const workNote = optionalString(formData, "workNote");
+  const nextActionNote = optionalString(formData, "nextActionNote");
+  const nextActionDateRaw = String(formData.get("nextActionDate") ?? "").trim();
+  const nextActionDate = nextActionDateRaw ? new Date(nextActionDateRaw) : null;
+  if (nextActionDate && Number.isNaN(nextActionDate.getTime())) {
+    return { error: "Next action date is invalid." };
+  }
+
+  await prisma.clientService.update({
+    where: { id: clientServiceId },
+    data: {
+      workStatus: workStatus as WorkStatus,
+      progressPercent,
+      workNote,
+      nextActionNote,
+      nextActionDate,
+    },
+  });
+
+  if (workStatus !== clientService.workStatus) {
+    await prisma.clientActivity.create({
+      data: {
+        clientId: clientService.clientId,
+        actorAdminId: admin.id,
+        eventType: "service.work_updated",
+        summary: `Work status changed to ${workStatus.replace("_", " ")}.`,
+      },
+    });
+  }
 
   return { ok: true };
 }

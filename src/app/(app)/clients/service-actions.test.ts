@@ -11,6 +11,7 @@ import {
   createServiceAction,
   updateServiceAction,
   updateServiceStatusAction,
+  updateWorkStatusAction,
 } from "@/app/(app)/clients/service-actions";
 import type { ServiceStatus } from "@/generated/prisma/client";
 
@@ -405,5 +406,161 @@ describe("updateServiceStatusAction", () => {
     expect(after.amountInPaise).toBe(before.amountInPaise);
     expect(after.dueDate.getTime()).toBe(before.dueDate.getTime());
     expect(after.status).toBe(before.status);
+  });
+});
+
+describe("updateWorkStatusAction", () => {
+  let orgId: number;
+  let clientServiceId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors" },
+    });
+    // createServiceAction (below) writes a ClientActivity row under a real
+    // FK to admin_users (added in Plan 1's Task 1 migration), and this
+    // block's own updateWorkStatusAction calls do too whenever workStatus
+    // actually changes — mockAdmin alone only stubs requireAdmin()'s
+    // return value, it doesn't create a backing row. A real AdminUser is
+    // required here (Plan 1's Task 4 review surfaced this exact gap —
+    // same fix applied consistently wherever a mocked admin authors an
+    // activity row).
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "admin@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, admin.id);
+    const created = await createServiceAction(
+      client.id,
+      serviceForm({
+        serviceName: "Local SEO",
+        feeInRupees: "5000",
+        frequency: "MONTHLY",
+        billingDay: "5",
+        startDate: "2026-08-03",
+      })
+    );
+    clientServiceId = (created as { clientServiceId: number }).clientServiceId;
+  });
+
+  it("updates work status, progress, note, and next action", async () => {
+    const form = new FormData();
+    form.set("workStatus", "IN_PROGRESS");
+    form.set("progressPercent", "70");
+    form.set("workNote", "Backlinks in progress");
+    form.set("nextActionNote", "Send monthly report");
+    form.set("nextActionDate", "2026-09-01");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ ok: true });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.workStatus).toBe("IN_PROGRESS");
+    expect(service.progressPercent).toBe(70);
+    expect(service.workNote).toBe("Backlinks in progress");
+    expect(service.nextActionNote).toBe("Send monthly report");
+    expect(service.nextActionDate?.toISOString().slice(0, 10)).toBe("2026-09-01");
+  });
+
+  it("allows clearing optional fields by submitting them empty", async () => {
+    const form = new FormData();
+    form.set("workStatus", "COMPLETED");
+    form.set("progressPercent", "100");
+    form.set("workNote", "");
+    form.set("nextActionNote", "");
+    form.set("nextActionDate", "");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ ok: true });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.workNote).toBeNull();
+    expect(service.nextActionDate).toBeNull();
+  });
+
+  it("rejects an invalid work status", async () => {
+    const form = new FormData();
+    form.set("workStatus", "BLOCKED");
+    form.set("progressPercent", "50");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ error: "Invalid work status." });
+  });
+
+  it("rejects a progress percent outside 0-100", async () => {
+    const form = new FormData();
+    form.set("workStatus", "IN_PROGRESS");
+    form.set("progressPercent", "150");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ error: "Progress must be between 0 and 100." });
+  });
+
+  it("allows an empty progress percent (it is optional)", async () => {
+    const form = new FormData();
+    form.set("workStatus", "NOT_STARTED");
+    form.set("progressPercent", "");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ ok: true });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.progressPercent).toBeNull();
+  });
+
+  it("returns an error for a service in a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    mockAdmin(otherOrg.id);
+    const form = new FormData();
+    form.set("workStatus", "IN_PROGRESS");
+    form.set("progressPercent", "50");
+
+    const result = await updateWorkStatusAction(clientServiceId, form);
+
+    expect(result).toEqual({ error: "Service not found." });
+  });
+
+  it("logs activity when the work status actually changes", async () => {
+    const form = new FormData();
+    form.set("workStatus", "IN_PROGRESS"); // service starts at NOT_STARTED
+    form.set("progressPercent", "10");
+
+    await updateWorkStatusAction(clientServiceId, form);
+
+    const activity = await prisma.clientActivity.findFirstOrThrow({
+      where: { eventType: "service.work_updated" },
+    });
+    expect(activity.summary.toLowerCase()).toContain("in progress");
+  });
+
+  it("does not log activity when the work status is unchanged (only progress/notes updated)", async () => {
+    const firstForm = new FormData();
+    firstForm.set("workStatus", "IN_PROGRESS");
+    firstForm.set("progressPercent", "10");
+    await updateWorkStatusAction(clientServiceId, firstForm);
+    const countAfterFirst = await prisma.clientActivity.count({
+      where: { eventType: "service.work_updated" },
+    });
+
+    const secondForm = new FormData();
+    secondForm.set("workStatus", "IN_PROGRESS"); // same status as before
+    secondForm.set("progressPercent", "40"); // only progress changes
+    await updateWorkStatusAction(clientServiceId, secondForm);
+
+    const countAfterSecond = await prisma.clientActivity.count({
+      where: { eventType: "service.work_updated" },
+    });
+    expect(countAfterSecond).toBe(countAfterFirst); // no new entry
   });
 });
