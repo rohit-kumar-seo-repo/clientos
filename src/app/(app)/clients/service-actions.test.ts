@@ -12,6 +12,7 @@ import {
   updateServiceAction,
   updateServiceStatusAction,
 } from "@/app/(app)/clients/service-actions";
+import type { ServiceStatus } from "@/generated/prisma/client";
 
 function mockAdmin(organizationId: number, adminId = 1) {
   vi.mocked(requireAdmin).mockResolvedValue({
@@ -116,7 +117,9 @@ describe("createServiceAction", () => {
 
     const result = await createServiceAction(clientId, form);
 
-    expect(result).toEqual({ error: "Price must be greater than zero." });
+    expect(result).toEqual({
+      error: "Price must be greater than zero and no more than ₹1,00,00,000.",
+    });
   });
 
   it("rejects a billing day outside 1-28", async () => {
@@ -145,6 +148,22 @@ describe("createServiceAction", () => {
     const result = await createServiceAction(clientId, form);
 
     expect(result).toEqual({ error: "Invalid billing frequency." });
+  });
+
+  it("rejects a fee above the upper bound", async () => {
+    const form = serviceForm({
+      serviceName: "Local SEO",
+      feeInRupees: "100000001",
+      frequency: "MONTHLY",
+      billingDay: "5",
+      startDate: "2026-08-03",
+    });
+
+    const result = await createServiceAction(clientId, form);
+
+    expect(result).toEqual({
+      error: "Price must be greater than zero and no more than ₹1,00,00,000.",
+    });
   });
 
   it("returns an error when the client belongs to a different organization", async () => {
@@ -232,7 +251,42 @@ describe("updateServiceAction", () => {
 
     const result = await updateServiceAction(clientServiceId, form);
 
-    expect(result).toEqual({ error: "Price must be greater than zero." });
+    expect(result).toEqual({
+      error: "Price must be greater than zero and no more than ₹1,00,00,000.",
+    });
+  });
+
+  it("rejects a fee above the upper bound", async () => {
+    const form = new FormData();
+    form.set("feeInRupees", "100000001");
+    form.set("frequency", "MONTHLY");
+    form.set("billingDay", "5");
+
+    const result = await updateServiceAction(clientServiceId, form);
+
+    expect(result).toEqual({
+      error: "Price must be greater than zero and no more than ₹1,00,00,000.",
+    });
+  });
+
+  it("logs a service.updated activity with the admin who made the change", async () => {
+    const editor = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "editor@example.com", passwordHash: "x" },
+    });
+    mockAdmin(orgId, editor.id);
+
+    const form = new FormData();
+    form.set("feeInRupees", "6000");
+    form.set("frequency", "MONTHLY");
+    form.set("billingDay", "5");
+    await updateServiceAction(clientServiceId, form);
+
+    const activity = await prisma.clientActivity.findFirstOrThrow({
+      where: { eventType: "service.updated" },
+      orderBy: { id: "desc" },
+    });
+    expect(activity.actorAdminId).toBe(editor.id);
+    expect(activity.summary).toContain("6,000");
   });
 
   it("returns an error for a service in a different organization", async () => {
@@ -294,6 +348,19 @@ describe("updateServiceStatusAction", () => {
       where: { eventType: "service.status_changed" },
     });
     expect(activity.summary).toContain("PAUSED");
+  });
+
+  it("rejects an invalid status value", async () => {
+    const result = await updateServiceStatusAction(
+      clientServiceId,
+      "DELETED" as unknown as ServiceStatus
+    );
+
+    expect(result).toEqual({ error: "Invalid status." });
+    const service = await prisma.clientService.findUniqueOrThrow({
+      where: { id: clientServiceId },
+    });
+    expect(service.status).toBe("ACTIVE"); // untouched
   });
 
   it("rejects a status change for a service in a different organization", async () => {

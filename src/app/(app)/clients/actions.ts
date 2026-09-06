@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/require-admin";
+import { requireClientInOwnOrg } from "@/lib/authz";
 
 /**
  * Maximum lengths for every bounded string column these actions write,
@@ -167,14 +168,6 @@ export async function updateClientAction(
   }
 
   return { ok: true };
-}
-
-export async function requireClientInOwnOrg(clientId: number) {
-  const admin = await requireAdmin();
-  const client = await prisma.client.findFirst({
-    where: { id: clientId, organizationId: admin.organizationId },
-  });
-  return { admin, client };
 }
 
 export async function addContactAction(

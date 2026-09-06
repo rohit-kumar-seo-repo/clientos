@@ -1,10 +1,10 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { requireAdmin } from "@/lib/require-admin";
-import { requireClientInOwnOrg } from "./actions";
+import { requireClientInOwnOrg, requireClientServiceInOwnOrg } from "@/lib/authz";
 import { createClientService } from "@/lib/services";
 import type { BillingFrequency } from "@/generated/prisma/client";
+import { ServiceStatus } from "@/generated/prisma/client";
 
 const VALID_FREQUENCIES: BillingFrequency[] = [
   "MONTHLY",
@@ -14,28 +14,22 @@ const VALID_FREQUENCIES: BillingFrequency[] = [
   "ONE_TIME",
 ];
 
-/**
- * Resolves a clientServiceId to its owning client, scoped to the
- * authenticated admin's organization — the service-level counterpart to
- * requireClientInOwnOrg. Never throws for a missing/wrong-org id; callers
- * check `clientService === null`.
- */
-export async function requireClientServiceInOwnOrg(clientServiceId: number) {
-  const admin = await requireAdmin();
-  const clientService = await prisma.clientService.findFirst({
-    where: {
-      id: clientServiceId,
-      client: { organizationId: admin.organizationId },
-    },
-    include: { client: true },
-  });
-  return { admin, clientService };
-}
+// MySQL INT tops out at 2,147,483,647; ₹1,00,00,000 (1 crore) in paise
+// gives generous headroom for any real agency service fee while catching
+// a typo'd extra zero before it reaches the database as an unhandled
+// driver error instead of a friendly { error }.
+const MAX_FEE_IN_PAISE = 1_000_000_000; // ₹1,00,00,000
+
+const VALID_STATUSES: ServiceStatus[] = Object.values(ServiceStatus);
 
 export async function createServiceAction(
   clientId: number,
   formData: FormData
 ): Promise<{ error: string } | { clientServiceId: number }> {
+  if (!Number.isInteger(clientId)) {
+    return { error: "Invalid client." };
+  }
+
   const { client } = await requireClientInOwnOrg(clientId);
   if (!client) {
     return { error: "Client not found." };
@@ -47,8 +41,9 @@ export async function createServiceAction(
   }
 
   const feeInRupees = Number(formData.get("feeInRupees"));
-  if (!Number.isFinite(feeInRupees) || feeInRupees <= 0) {
-    return { error: "Price must be greater than zero." };
+  const feeInPaise = Math.round(feeInRupees * 100);
+  if (!Number.isFinite(feeInRupees) || feeInRupees <= 0 || feeInPaise > MAX_FEE_IN_PAISE) {
+    return { error: "Price must be greater than zero and no more than ₹1,00,00,000." };
   }
 
   const billingDay = Number(formData.get("billingDay"));
@@ -76,7 +71,7 @@ export async function createServiceAction(
   const service = await createClientService({
     clientId,
     serviceName,
-    feeInPaise: Math.round(feeInRupees * 100),
+    feeInPaise,
     frequency: frequency as BillingFrequency,
     billingDay,
     startDate,
@@ -100,14 +95,19 @@ export async function updateServiceAction(
   clientServiceId: number,
   formData: FormData
 ): Promise<{ error: string } | { ok: true }> {
-  const { clientService } = await requireClientServiceInOwnOrg(clientServiceId);
+  if (!Number.isInteger(clientServiceId)) {
+    return { error: "Invalid service." };
+  }
+
+  const { admin, clientService } = await requireClientServiceInOwnOrg(clientServiceId);
   if (!clientService) {
     return { error: "Service not found." };
   }
 
   const feeInRupees = Number(formData.get("feeInRupees"));
-  if (!Number.isFinite(feeInRupees) || feeInRupees <= 0) {
-    return { error: "Price must be greater than zero." };
+  const feeInPaise = Math.round(feeInRupees * 100);
+  if (!Number.isFinite(feeInRupees) || feeInRupees <= 0 || feeInPaise > MAX_FEE_IN_PAISE) {
+    return { error: "Price must be greater than zero and no more than ₹1,00,00,000." };
   }
 
   const billingDay = Number(formData.get("billingDay"));
@@ -134,9 +134,17 @@ export async function updateServiceAction(
     prisma.billingPlan.update({
       where: { clientServiceId },
       data: {
-        amountInPaise: Math.round(feeInRupees * 100),
+        amountInPaise: feeInPaise,
         frequency: frequency as BillingFrequency,
         billingDay,
+      },
+    }),
+    prisma.clientActivity.create({
+      data: {
+        clientId: clientService.clientId,
+        actorAdminId: admin.id,
+        eventType: "service.updated",
+        summary: `Service updated: ₹${feeInRupees.toLocaleString("en-IN")} / ${frequency}, billing day ${billingDay}${endDate ? `, ends ${endDate.toISOString().slice(0, 10)}` : ""}.`,
       },
     }),
   ]);
@@ -146,11 +154,19 @@ export async function updateServiceAction(
 
 export async function updateServiceStatusAction(
   clientServiceId: number,
-  status: "ACTIVE" | "PAUSED" | "CANCELLED"
+  status: ServiceStatus
 ): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(clientServiceId)) {
+    return { error: "Invalid service." };
+  }
+
   const { admin, clientService } = await requireClientServiceInOwnOrg(clientServiceId);
   if (!clientService) {
     return { error: "Service not found." };
+  }
+
+  if (!VALID_STATUSES.includes(status)) {
+    return { error: "Invalid status." };
   }
 
   await prisma.$transaction([
