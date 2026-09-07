@@ -136,6 +136,82 @@ export async function getMonthlySummary(
 }
 
 // ---------------------------------------------------------------------------
+// Work updates — active services needing work attention, ranked by next action
+// ---------------------------------------------------------------------------
+
+export type WorkUpdateItem = {
+  clientServiceId: number;
+  clientId: number;
+  clientName: string;
+  serviceName: string;
+  workStatus: string;
+  progressPercent: number | null;
+  nextActionNote: string | null;
+  nextActionDate: Date | null;
+  updatedAt: Date;
+};
+
+export async function getWorkUpdates(
+  organizationId: number,
+  today: Date,
+  limit = 8
+): Promise<WorkUpdateItem[]> {
+  const todayStart = startOfUTCDay(today);
+
+  // Fetch all active, non-completed services with work data
+  const services = await prisma.clientService.findMany({
+    where: {
+      status: "ACTIVE",
+      workStatus: { not: "COMPLETED" },
+      client: { organizationId },
+    },
+    include: {
+      client: { select: { id: true, businessName: true } },
+      serviceTemplate: { select: { name: true } },
+    },
+    orderBy: [
+      // Rows with a nextActionDate come before those without
+      { nextActionDate: "asc" },
+      // Then most recently updated
+      { updatedAt: "desc" },
+    ],
+    take: limit * 2, // fetch extra so we can re-sort in JS
+  });
+
+  // Re-rank: overdue/due-today first, then future dates, then no date
+  const overdue: typeof services = [];
+  const upcoming: typeof services = [];
+  const noDate: typeof services = [];
+
+  for (const s of services) {
+    if (s.nextActionDate) {
+      const dateMs = new Date(s.nextActionDate).setUTCHours(0, 0, 0, 0);
+      if (dateMs <= todayStart.getTime()) {
+        overdue.push(s);
+      } else {
+        upcoming.push(s);
+      }
+    } else {
+      noDate.push(s);
+    }
+  }
+
+  const ranked = [...overdue, ...upcoming, ...noDate].slice(0, limit);
+
+  return ranked.map((s) => ({
+    clientServiceId: s.id,
+    clientId: s.client.id,
+    clientName: s.client.businessName,
+    serviceName: s.serviceTemplate.name,
+    workStatus: s.workStatus,
+    progressPercent: s.progressPercent,
+    nextActionNote: s.nextActionNote,
+    nextActionDate: s.nextActionDate,
+    updatedAt: s.updatedAt,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Recent activity — org-scoped, newest first
 // ---------------------------------------------------------------------------
 

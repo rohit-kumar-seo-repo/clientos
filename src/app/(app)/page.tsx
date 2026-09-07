@@ -3,12 +3,13 @@ import {
   getAttentionData,
   getMonthlySummary,
   getRecentActivity,
+  getWorkUpdates,
 } from "@/lib/dashboard";
 import { AttentionSummary } from "@/components/dashboard/AttentionSummary";
 import { ClientAttentionList } from "@/components/dashboard/ClientAttentionList";
 import { MonthlySummary } from "@/components/dashboard/MonthlySummary";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
-import { UpcomingRenewals } from "@/components/dashboard/UpcomingRenewals";
+import { WorkUpdates } from "@/components/dashboard/WorkUpdates";
 
 // I5: Resolve today as the current IST calendar date. This app is India-only
 // (₹-denominated, en-IN formatted). Between 00:00 and 05:30 IST, the UTC clock
@@ -35,10 +36,11 @@ export default async function OverviewPage() {
   const today = todayInIST();
   const todayISO = today.toISOString(); // safe to pass to client components
 
-  const [services, summary, recentActivity] = await Promise.all([
+  const [services, summary, recentActivity, workUpdates] = await Promise.all([
     getAttentionData(admin.organizationId, today),
     getMonthlySummary(admin.organizationId, today),
     getRecentActivity(admin.organizationId, 6),
+    getWorkUpdates(admin.organizationId, today),
   ]);
 
   return (
@@ -64,10 +66,10 @@ export default async function OverviewPage() {
         </div>
       </div>
 
-      {/* Row 3 — Recent activity (left) + Upcoming renewals (right) */}
+      {/* Row 3 — Recent activity (left) + Work updates (right) */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <RecentActivity items={recentActivity} />
-        <UpcomingRenewals services={services} todayISO={todayISO} />
+        <WorkUpdates items={workUpdates} todayISO={todayISO} />
       </div>
     </div>
   );
