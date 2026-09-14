@@ -53,3 +53,20 @@ export async function getPaymentHistoryForClient(organizationId: number, clientI
     orderBy: { createdAt: "desc" },
   });
 }
+
+/**
+ * Returns all projects for a client, scoped to the org.
+ * Milestones are ordered by sortOrder; add-ons by createdAt.
+ * Paid status and paidAt come from the milestone/addon row — no payment
+ * join needed here since status is stored on the obligation itself.
+ */
+export async function getProjectsForClient(organizationId: number, clientId: number) {
+  return prisma.project.findMany({
+    where: { clientId, client: { organizationId } },
+    include: {
+      milestones: { orderBy: { sortOrder: "asc" } },
+      addOns: { orderBy: { createdAt: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
