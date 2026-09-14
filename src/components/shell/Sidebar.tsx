@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// V1 primary nav — Calendar and Reports are deferred phases
+// V1 primary nav — Reports is still a deferred phase
 const PRIMARY_NAV = [
   { href: "/", label: "Overview" },
   { href: "/clients", label: "Clients" },
   { href: "/work", label: "Work" },
   { href: "/payments", label: "Payments" },
+  { href: "/calendar", label: "Calendar" },
 ];
 
 // V1 management nav — Reminder Rules, Team, Integrations are deferred
