@@ -1,5 +1,5 @@
 import type { RankedService } from "@/lib/attention";
-import type { ProjectObligationItem } from "@/lib/dashboard";
+import type { MonthlySummary, ProjectObligationItem } from "@/lib/dashboard";
 
 function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN")}`;
@@ -20,9 +20,11 @@ function projTotal(items: ProjectObligationItem[]): number {
 export function AttentionSummary({
   services,
   projectObligations,
+  summary,
 }: {
   services: RankedService[];
   projectObligations: ProjectObligationItem[];
+  summary: MonthlySummary;
 }) {
   const overduePay = services.filter((s) => s.tier === "overdue_payment");
   const overduePayProj = projectObligations.filter((p) => p.tier === "overdue_payment");
@@ -38,10 +40,20 @@ export function AttentionSummary({
   );
 
   const workAttention = services.filter((s) => s.tier === "overdue_work");
-  const renewals = services.filter((s) => s.tier === "upcoming_renewal");
 
   return (
     <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">
+      {/* Total Collected Payment — this month, recurring + projects */}
+      <div className="rounded-xl border border-emerald-100 bg-white p-4">
+        <p className="mb-2 text-xs font-medium text-neutral-500">Total Collected Payment</p>
+        <p className="text-2xl font-semibold text-emerald-600">
+          {fmt(summary.thisMonth.collectedInPaise)}
+        </p>
+        <p className="mt-1 text-xs text-neutral-400">
+          {summary.thisMonth.paymentCount} {summary.thisMonth.paymentCount === 1 ? "payment" : "payments"} this month
+        </p>
+      </div>
+
       {/* Overdue Payments */}
       <div className="rounded-xl border border-red-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Overdue Payments</p>
@@ -93,15 +105,6 @@ export function AttentionSummary({
         <p className="text-2xl font-semibold text-indigo-600">{workAttention.length}</p>
         <p className="mt-1 text-xs text-neutral-400">
           {workAttention.length === 1 ? "service" : "services"} need attention
-        </p>
-      </div>
-
-      {/* Upcoming Renewals — recurring only, no change */}
-      <div className="rounded-xl border border-neutral-200 bg-white p-4">
-        <p className="mb-2 text-xs font-medium text-neutral-500">Upcoming Renewals</p>
-        <p className="text-2xl font-semibold text-neutral-700">{renewals.length}</p>
-        <p className="mt-1 text-xs text-neutral-400">
-          {renewals.length === 1 ? "client" : "clients"} &middot; next 30 days
         </p>
       </div>
     </div>

@@ -235,7 +235,7 @@ describe("getMonthlySummary", () => {
     expect(summary.recurring.expectedInPaise).toBe(0);
   });
 
-  it("includes this month's project milestone in expectedInPaise", async () => {
+  it("expectedInPaise is the project's base amount, not just this month's milestone", async () => {
     const project = await prisma.project.create({
       data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
     });
@@ -251,8 +251,8 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.projects.expectedInPaise).toBe(300000);
-    expect(summary.projects.pendingInPaise).toBe(300000);
+    expect(summary.projects.expectedInPaise).toBe(1000000);
+    expect(summary.projects.pendingInPaise).toBe(1000000);
   });
 
   it("includes paid project milestone in collectedInPaise", async () => {
@@ -310,6 +310,68 @@ describe("getMonthlySummary", () => {
     const summary = await getMonthlySummary(orgId, TODAY);
 
     expect(summary.projects.expectedInPaise).toBe(0);
+  });
+
+  it("projects.collectedInPaise is lifetime, not scoped to this month", async () => {
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 300000,
+        dueDate: new Date(Date.UTC(2026, 6, 15)), // July — prior month, but PAID
+        status: "PAID",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.projects.collectedInPaise).toBe(300000);
+    expect(summary.thisMonth.collectedInPaise).toBe(0); // paid in July, not this month
+    expect(summary.thisMonth.paymentCount).toBe(0);
+  });
+
+  it("thisMonth totals combine recurring and project payments collected this month", async () => {
+    const service = await createClientService({
+      clientId,
+      serviceName: "Local SEO",
+      feeInPaise: 500000,
+      frequency: "MONTHLY",
+      billingDay: 5,
+      startDate: new Date(Date.UTC(2026, 8, 1)),
+      endDate: null,
+    });
+    const plan = await prisma.billingPlan.findUniqueOrThrow({ where: { clientServiceId: service.id } });
+    const period = await prisma.billingPeriod.findFirstOrThrow({ where: { billingPlanId: plan.id } });
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: orgId, email: "a@example.com", passwordHash: "x" },
+    });
+    await markBillingPeriodPaid({
+      billingPeriodId: period.id,
+      amountInPaise: 500000,
+      paidAt: TODAY,
+      recordedByAdminId: admin.id,
+    });
+
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 500000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Advance",
+        amountInPaise: 200000,
+        dueDate: TODAY, // paidAt is set to dueDate by recordProjectPaymentAction
+        status: "PAID",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.thisMonth.collectedInPaise).toBe(500000 + 200000);
+    expect(summary.thisMonth.paymentCount).toBe(2);
   });
 });
 

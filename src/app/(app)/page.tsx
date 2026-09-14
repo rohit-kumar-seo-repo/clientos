@@ -56,7 +56,7 @@ export default async function OverviewPage() {
       </div>
 
       {/* Row 1 — Attention summary cards (5 KPIs) */}
-      <AttentionSummary services={services} projectObligations={projectObligations} />
+      <AttentionSummary services={services} projectObligations={projectObligations} summary={summary} />
 
       {/* Row 2 — Attention list (left, wider) + Monthly summary (right) */}
       <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-5">

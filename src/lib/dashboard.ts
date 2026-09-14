@@ -64,10 +64,15 @@ export type MonthlySummary = {
     overdueInPaise: number;
   };
   projects: {
-    expectedInPaise: number;  // project obligations due this month
-    collectedInPaise: number;
+    expectedInPaise: number;  // total base amount of all non-cancelled projects
+    collectedInPaise: number; // total collected across project lifetime
     pendingInPaise: number;
     overdueInPaise: number;
+  };
+  // Cross-cutting "this month" totals — feeds the Total Collected Payment KPI card.
+  thisMonth: {
+    collectedInPaise: number; // recurring + project payments collected this month
+    paymentCount: number;     // number of payment events this month
   };
 };
 
@@ -147,15 +152,19 @@ export async function getMonthlySummary(
     status: { not: "CANCELLED" as const },
   };
 
-  const [thisMonthMilestones, thisMonthAddOns, allOverdueMilestones, allOverdueAddOns] =
+  const [allProjects, allPaidMilestones, allPaidAddOns, allOverdueMilestones, allOverdueAddOns] =
     await Promise.all([
+      prisma.project.findMany({
+        where: projectFilter,
+        select: { baseAmountInPaise: true },
+      }),
       prisma.projectMilestone.findMany({
-        where: { dueDate: { gte: monthStart, lt: monthEnd }, project: projectFilter },
-        select: { amountInPaise: true, status: true, dueDate: true },
+        where: { status: "PAID", project: projectFilter },
+        select: { amountInPaise: true, dueDate: true },
       }),
       prisma.projectAddOn.findMany({
-        where: { dueDate: { gte: monthStart, lt: monthEnd }, project: projectFilter },
-        select: { amountInPaise: true, status: true, dueDate: true },
+        where: { status: "PAID", project: projectFilter },
+        select: { amountInPaise: true, dueDate: true },
       }),
       prisma.projectMilestone.findMany({
         where: { status: "PENDING", dueDate: { lt: normalizedToday }, project: projectFilter },
@@ -167,22 +176,27 @@ export async function getMonthlySummary(
       }),
     ]);
 
-  const allProjectThisMonth = [...thisMonthMilestones, ...thisMonthAddOns];
+  const allPaidProjectObligations = [...allPaidMilestones, ...allPaidAddOns];
 
-  // Expected: all project obligations due this month (paid or pending)
-  const projectExpectedInPaise = allProjectThisMonth.reduce((s, o) => s + o.amountInPaise, 0);
+  // Expected: total contracted value of every active (non-cancelled) project —
+  // not just obligations due this month. This is the project's base amount.
+  const projectExpectedInPaise = allProjects.reduce((s, p) => s + p.baseAmountInPaise, 0);
 
-  // Collected: amount-integrity holds (payment === obligation amount), so PAID = collected
-  const projectCollectedInPaise = allProjectThisMonth
-    .filter((o) => o.status === "PAID")
+  // Collected: all payments received across the project's lifetime.
+  const projectCollectedInPaise = allPaidProjectObligations.reduce(
+    (s, o) => s + o.amountInPaise,
+    0
+  );
+
+  // This month's slice of collected — dueDate is set to paidAt when a payment
+  // is recorded (see recordProjectPaymentAction), so this correctly reflects
+  // when the money actually came in, not when the milestone was created.
+  const projectCollectedThisMonthInPaise = allPaidProjectObligations
+    .filter((o) => o.dueDate !== null && o.dueDate >= monthStart && o.dueDate < monthEnd)
     .reduce((s, o) => s + o.amountInPaise, 0);
-
-  // Overdue this month: PENDING and past due — used for pending calc (no double-counting)
-  const projectOverdueThisMonthInPaise = allProjectThisMonth
-    .filter(
-      (o) => o.status === "PENDING" && o.dueDate !== null && new Date(o.dueDate) < normalizedToday
-    )
-    .reduce((s, o) => s + o.amountInPaise, 0);
+  const projectPaymentCountThisMonth = allPaidProjectObligations.filter(
+    (o) => o.dueDate !== null && o.dueDate >= monthStart && o.dueDate < monthEnd
+  ).length;
 
   // Overdue all time: feeds the Overdue card (same cross-month scope as recurring)
   const projectOverdueAllInPaise = [...allOverdueMilestones, ...allOverdueAddOns].reduce(
@@ -200,8 +214,15 @@ export async function getMonthlySummary(
     projects: {
       expectedInPaise: projectExpectedInPaise,
       collectedInPaise: projectCollectedInPaise,
-      pendingInPaise: projectExpectedInPaise - projectCollectedInPaise - projectOverdueThisMonthInPaise,
+      pendingInPaise: Math.max(
+        0,
+        projectExpectedInPaise - projectCollectedInPaise - projectOverdueAllInPaise
+      ),
       overdueInPaise: projectOverdueAllInPaise,
+    },
+    thisMonth: {
+      collectedInPaise: collectedInPaise + projectCollectedThisMonthInPaise,
+      paymentCount: paidThisMonthPeriodIds.length + projectPaymentCountThisMonth,
     },
   };
 }
