@@ -99,6 +99,22 @@ enum WorkStatus {
   ON_HOLD
 }
 
+// One-time project lifecycle. Separate from recurring ServiceStatus.
+enum ProjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+}
+
+// Payment obligation status for project milestones and add-ons.
+// V1: no partial payments — PENDING flips to PAID atomically.
+enum MilestoneStatus {
+  PENDING
+  PAID
+}
+
 // Exactly the states listed in spec §19.
 enum RenewalStatus {
   ACTIVE
@@ -272,6 +288,7 @@ model Client {
   invoices      Invoice[]
   renewals      Renewal[]
   reminderRules ReminderRule[]
+  projects      Project[]
 
   @@index([organizationId])
   @@index([status])
@@ -519,21 +536,32 @@ model Invoice {
   @@map("invoices")
 }
 
-// One row per BillingPeriod folded into an Invoice. billingPeriodId is
-// @unique — a given period can belong to at most one invoice, which is
-// what makes "never duplicate financial records when combining invoices"
-// a schema-level guarantee, not just a policy. amountInPaise is snapshotted
-// from the period at invoicing time (should always equal the period's own
-// amount in V1 — no partial-period line items yet).
+// One row per obligation folded into an Invoice. Exactly one of
+// (billingPeriodId, projectMilestoneId, projectAddOnId) must be non-null —
+// enforced centrally in server-side creation logic, not the DB layer (MySQL
+// has no partial CHECK support in older versions). The @unique on each FK
+// column still guarantees no obligation is double-invoiced regardless.
+//
+// billingPeriodId is now nullable so project obligations can share this
+// model without forcing Invoice/BillingPeriod coupling. Existing recurring
+// rows all have billingPeriodId set and are unaffected by the nullable change.
 model InvoiceLineItem {
-  id              Int      @id @default(autoincrement())
-  invoiceId       Int
-  billingPeriodId Int      @unique
-  amountInPaise   Int
-  createdAt       DateTime @default(now())
+  id                 Int      @id @default(autoincrement())
+  invoiceId          Int
+  billingPeriodId    Int?     @unique // recurring: one period ↔ one line item
+  projectMilestoneId Int?     @unique // project milestone payment obligation
+  projectAddOnId     Int?     @unique // project add-on payment obligation
+  description        String?  @db.VarChar(255) // human label (e.g. "50% Advance")
+  amountInPaise      Int
+  createdAt          DateTime @default(now())
 
-  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
-  billingPeriod BillingPeriod @relation(fields: [billingPeriodId], references: [id])
+  invoice          Invoice           @relation(fields: [invoiceId], references: [id])
+  // onDelete: Restrict preserves the production constraint (RESTRICT/CASCADE).
+  // Prisma would default to SetNull for nullable FKs, which would change the
+  // live constraint — we explicitly override it here.
+  billingPeriod    BillingPeriod?    @relation(fields: [billingPeriodId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  projectMilestone ProjectMilestone? @relation(fields: [projectMilestoneId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  projectAddOn     ProjectAddOn?     @relation(fields: [projectAddOnId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([invoiceId])
   @@map("invoice_line_items")
@@ -600,6 +628,84 @@ model WebhookEvent {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@map("webhook_events")
+}
+
+// =============================================================================
+// ONE-TIME PROJECTS — separate from recurring ClientService/BillingPlan.
+// A client can have both. Financial obligations go through the same
+// Invoice → InvoiceLineItem → Payment path as recurring services; only the
+// InvoiceLineItem FK column differs (projectMilestoneId / projectAddOnId
+// instead of billingPeriodId).
+// =============================================================================
+
+model Project {
+  id                Int           @id @default(autoincrement())
+  clientId          Int
+  title             String        @db.VarChar(200)
+  description       String?       @db.VarChar(1000)
+  status            ProjectStatus @default(NOT_STARTED)
+  // baseAmountInPaise = original agreed project amount. Never changed when
+  // add-ons are added — add-ons are tracked separately so the audit trail
+  // is clear (original ₹30k + add-on ₹5k, not rewritten as ₹35k).
+  baseAmountInPaise Int
+  startDate         DateTime?
+  endDate           DateTime?
+  workNote          String?       @db.VarChar(500)
+  nextActionNote    String?       @db.VarChar(255)
+  nextActionDate    DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  client     Client             @relation(fields: [clientId], references: [id])
+  milestones ProjectMilestone[]
+  addOns     ProjectAddOn[]
+
+  @@index([clientId])
+  @@map("projects")
+}
+
+// A payment obligation within a project. V1: no partial payments — PENDING
+// flips atomically to PAID via the same transactional idempotency guard as
+// markBillingPeriodPaid. Adding milestones to an existing project is allowed;
+// sortOrder controls display sequence.
+model ProjectMilestone {
+  id            Int             @id @default(autoincrement())
+  projectId     Int
+  label         String          @db.VarChar(150) // e.g. "50% Advance"
+  amountInPaise Int
+  dueDate       DateTime?
+  status        MilestoneStatus @default(PENDING)
+  paidAt        DateTime?
+  sortOrder     Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invoiceLineItem InvoiceLineItem? // null until marked paid
+
+  @@index([projectId])
+  @@map("project_milestones")
+}
+
+// An additional charge added after the original project quote. Amount is
+// separate from baseAmountInPaise on the parent Project — total project value
+// is computed as baseAmountInPaise + sum(addOns.amountInPaise).
+model ProjectAddOn {
+  id            Int             @id @default(autoincrement())
+  projectId     Int
+  description   String          @db.VarChar(255) // e.g. "Additional Landing Page"
+  amountInPaise Int
+  dueDate       DateTime?
+  status        MilestoneStatus @default(PENDING)
+  note          String?         @db.VarChar(500)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invoiceLineItem InvoiceLineItem? // null until marked paid
+
+  @@index([projectId])
+  @@map("project_add_ons")
 }
 
 // =============================================================================

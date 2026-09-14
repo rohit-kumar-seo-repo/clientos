@@ -45,8 +45,8 @@ export default async function PaymentsPage() {
 
   function serviceName(payment: (typeof payments)[number]): string {
     return (
-      payment.invoice.lineItems[0]?.billingPeriod.billingPlan.clientService
-        .serviceTemplate.name ?? "—"
+      payment.invoice.lineItems[0]?.billingPeriod?.billingPlan?.clientService
+        ?.serviceTemplate.name ?? "—"
     );
   }
 
