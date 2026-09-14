@@ -36,3 +36,51 @@ export async function requireClientServiceInOwnOrg(clientServiceId: number) {
   });
   return { admin, clientService };
 }
+
+/**
+ * Resolves a projectId to its owning project + client, scoped to the
+ * authenticated admin's organization. Never throws; callers check
+ * `project === null`.
+ */
+export async function requireProjectInOwnOrg(projectId: number) {
+  const admin = await requireAdmin();
+  const project = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      client: { organizationId: admin.organizationId },
+    },
+    include: { client: true },
+  });
+  return { admin, project };
+}
+
+/**
+ * Resolves a milestoneId → project → client, scoped to the org.
+ * Returns the milestone with its parent project (and client) if found.
+ */
+export async function requireMilestoneInOwnOrg(milestoneId: number) {
+  const admin = await requireAdmin();
+  const milestone = await prisma.projectMilestone.findFirst({
+    where: {
+      id: milestoneId,
+      project: { client: { organizationId: admin.organizationId } },
+    },
+    include: { project: { include: { client: true } } },
+  });
+  return { admin, milestone };
+}
+
+/**
+ * Resolves an addOnId → project → client, scoped to the org.
+ */
+export async function requireAddOnInOwnOrg(addOnId: number) {
+  const admin = await requireAdmin();
+  const addOn = await prisma.projectAddOn.findFirst({
+    where: {
+      id: addOnId,
+      project: { client: { organizationId: admin.organizationId } },
+    },
+    include: { project: { include: { client: true } } },
+  });
+  return { admin, addOn };
+}
