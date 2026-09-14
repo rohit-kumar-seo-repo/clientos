@@ -217,6 +217,104 @@ export async function deleteClientAction(
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// forceDeleteClientAction
+// ---------------------------------------------------------------------------
+
+/**
+ * Like deleteClientAction but bypasses the payment-block by first deleting
+ * all financial records (InvoiceLineItem → Payment → Invoice) before the
+ * cascade. Intended only for test data cleanup.
+ *
+ * The deletion order respects FK constraints:
+ *   1. Payments (reference Invoice)
+ *   2. InvoiceLineItems (reference Invoice + billing/project rows)
+ *   3. Invoices
+ *   4. Then the same cascade order as deleteClientAction
+ */
+export async function forceDeleteClientAction(
+  clientId: number
+): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(clientId)) return { error: "Invalid client." };
+
+  const { admin, client } = await requireClientInOwnOrg(clientId);
+  if (!client) return { error: "Client not found." };
+
+  await prisma.$transaction(async (tx) => {
+    const services = await tx.clientService.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+    const serviceIds = services.map((s) => s.id);
+
+    const billingPlans = await tx.billingPlan.findMany({
+      where: { clientServiceId: { in: serviceIds } },
+      select: { id: true },
+    });
+    const billingPlanIds = billingPlans.map((p) => p.id);
+
+    // Collect all invoice ids for this client
+    const invoices = await tx.invoice.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+    const invoiceIds = invoices.map((i) => i.id);
+
+    // Delete payments first (they reference Invoice)
+    if (invoiceIds.length > 0) {
+      await tx.payment.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
+      // Delete all line items (releases Restrict FKs on milestones/addons/periods)
+      await tx.invoiceLineItem.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
+      await tx.invoice.deleteMany({ where: { id: { in: invoiceIds } } });
+    }
+
+    // Now proceed with the same cascade as deleteClientAction
+    const reminderJobs = await tx.reminderJob.findMany({
+      where: {
+        OR: [
+          { billingPeriod: { billingPlanId: { in: billingPlanIds } } },
+          { renewal: { clientId } },
+        ],
+      },
+      select: { id: true },
+    });
+    const reminderJobIds = reminderJobs.map((j) => j.id);
+    if (reminderJobIds.length > 0) {
+      await tx.notificationLog.deleteMany({ where: { reminderJobId: { in: reminderJobIds } } });
+      await tx.reminderJob.deleteMany({ where: { id: { in: reminderJobIds } } });
+    }
+
+    await tx.billingPeriod.deleteMany({ where: { billingPlanId: { in: billingPlanIds } } });
+    await tx.taskInstance.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.billingPlan.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.clientServiceCategory.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.clientService.deleteMany({ where: { clientId } });
+
+    await tx.project.deleteMany({ where: { clientId } });
+
+    await tx.renewal.deleteMany({ where: { clientId } });
+    await tx.reminderRule.deleteMany({ where: { clientId } });
+
+    await tx.clientActivity.deleteMany({ where: { clientId } });
+    await tx.clientNote.deleteMany({ where: { clientId } });
+    await tx.clientContact.deleteMany({ where: { clientId } });
+    await tx.client.delete({ where: { id: clientId } });
+
+    await tx.auditLog.create({
+      data: {
+        organizationId: admin.organizationId,
+        adminUserId: admin.id,
+        action: "client.force_deleted",
+        entityType: "Client",
+        entityId: String(clientId),
+        metadata: { businessName: client.businessName },
+      },
+    });
+  });
+
+  return { ok: true };
+}
+
 function optionalString(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;

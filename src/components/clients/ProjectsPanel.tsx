@@ -12,6 +12,7 @@ import {
   markAddOnPaidAction,
   updateMilestoneAction,
   deleteMilestoneAction,
+  recordProjectPaymentAction,
 } from "@/app/(app)/clients/project-actions";
 
 type ProjectWithObligations = Project & {
@@ -189,6 +190,8 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
   const [addMilestoneError, setAddMilestoneError] = useState<string | null>(null);
   const [showAddAddon, setShowAddAddon] = useState(false);
   const [addAddonError, setAddAddonError] = useState<string | null>(null);
+  const [showRecordPayment, setShowRecordPayment] = useState(false);
+  const [recordPaymentError, setRecordPaymentError] = useState<string | null>(null);
 
   const addOnTotal = project.addOns.reduce((s, a) => s + a.amountInPaise, 0);
   const totalAmount = project.baseAmountInPaise + addOnTotal;
@@ -232,6 +235,17 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
     }
     setAddAddonError(null);
     setShowAddAddon(false);
+    router.refresh();
+  }
+
+  async function handleRecordPayment(formData: FormData) {
+    const result = await recordProjectPaymentAction(project.id, formData);
+    if ("error" in result) {
+      setRecordPaymentError(result.error);
+      return;
+    }
+    setRecordPaymentError(null);
+    setShowRecordPayment(false);
     router.refresh();
   }
 
@@ -370,12 +384,24 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
 
       {/* Add buttons — hidden for cancelled projects */}
       {!isCancelled && (
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowRecordPayment((v) => !v);
+              setShowAddMilestone(false);
+              setShowAddAddon(false);
+            }}
+            className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+          >
+            {showRecordPayment ? "Close" : "₹ Record Payment"}
+          </button>
           <button
             type="button"
             onClick={() => {
               setShowAddMilestone((v) => !v);
               setShowAddAddon(false);
+              setShowRecordPayment(false);
             }}
             className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
           >
@@ -386,12 +412,75 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
             onClick={() => {
               setShowAddAddon((v) => !v);
               setShowAddMilestone(false);
+              setShowRecordPayment(false);
             }}
             className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
           >
             {showAddAddon ? "Close" : "+ Add-on"}
           </button>
         </div>
+      )}
+
+      {/* Record Payment form */}
+      {showRecordPayment && (
+        <form
+          action={handleRecordPayment}
+          className="mt-2 space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3"
+        >
+          {recordPaymentError && (
+            <p className="text-xs text-red-600">{recordPaymentError}</p>
+          )}
+          <p className="text-xs font-medium text-emerald-800">
+            Balance remaining: {fmtAmount(remaining)}
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <label className="mb-1 block text-xs text-neutral-600">Label (e.g. "Advance")</label>
+              <input
+                name="label"
+                type="text"
+                placeholder="Advance"
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600">Amount received (₹)</label>
+              <input
+                name="amountInRupees"
+                type="number"
+                min="0.01"
+                step="0.01"
+                required
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-neutral-600">Date received</label>
+              <input
+                name="paidAt"
+                type="date"
+                required
+                defaultValue={new Date().toISOString().slice(0, 10)}
+                className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
+            >
+              Record
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowRecordPayment(false)}
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
 
       {/* Add Milestone form */}

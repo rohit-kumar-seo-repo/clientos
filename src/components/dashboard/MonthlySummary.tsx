@@ -4,16 +4,91 @@ function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN")}`;
 }
 
-export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
-  const { expectedInPaise, collectedInPaise, pendingInPaise, overdueInPaise } = summary;
+function SectionRow({
+  label,
+  color,
+  value,
+}: {
+  label: string;
+  color: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between text-xs">
+      <span className={`flex items-center gap-1.5 text-neutral-600`}>
+        <span className={`h-2 w-2 rounded-full ${color}`} />
+        {label}
+      </span>
+      <span className={`font-medium ${color.includes("emerald") ? "text-emerald-700" : color.includes("amber") ? "text-amber-700" : "text-red-600"}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
 
-  // Collection progress: what fraction of this month's expected billing is collected
+function Section({
+  title,
+  expected,
+  collected,
+  pending,
+  overdue,
+}: {
+  title: string;
+  expected: number;
+  collected: number;
+  pending: number;
+  overdue: number;
+}) {
   const progressPct =
-    expectedInPaise > 0
-      ? Math.min(100, Math.round((collectedInPaise / expectedInPaise) * 100))
-      : 0;
+    expected > 0 ? Math.min(100, Math.round((collected / expected) * 100)) : 0;
 
-  // Current month label
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{title}</p>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <p className="text-xs text-neutral-500">Expected</p>
+          <p className="mt-0.5 text-sm font-semibold text-neutral-900">{fmt(expected)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-neutral-500">Collected</p>
+          <p className="mt-0.5 text-sm font-semibold text-emerald-700">{fmt(collected)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-neutral-500">Pending</p>
+          <p className="mt-0.5 text-sm font-semibold text-amber-600">{fmt(pending)}</p>
+        </div>
+      </div>
+      {expected > 0 && (
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-neutral-500">Collected</span>
+            <span className="text-xs font-semibold text-neutral-700">{progressPct}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
+            <div
+              className="h-full rounded-full bg-emerald-500 transition-all"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {overdue > 0 && (
+        <div className="flex items-center justify-between text-xs">
+          <span className="flex items-center gap-1.5 text-neutral-500">
+            <span className="h-2 w-2 rounded-full bg-red-400" />
+            Overdue (all months)
+          </span>
+          <span className="font-medium text-red-600">{fmt(overdue)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
+  const { recurring, projects } = summary;
+
   const now = new Date();
   const monthLabel = now.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
@@ -24,63 +99,24 @@ export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
         <span className="text-xs text-neutral-400">{monthLabel}</span>
       </div>
 
-      <div className="p-4">
-        {/* Three top figures */}
-        <div className="mb-5 grid grid-cols-3 gap-3">
-          <div>
-            <p className="text-xs text-neutral-500">Expected</p>
-            <p className="mt-1 text-lg font-semibold text-neutral-900">{fmt(expectedInPaise)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-neutral-500">Collected</p>
-            <p className="mt-1 text-lg font-semibold text-emerald-700">{fmt(collectedInPaise)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-neutral-500">Pending</p>
-            <p className="mt-1 text-lg font-semibold text-amber-600">{fmt(pendingInPaise)}</p>
-          </div>
+      <div className="divide-y divide-neutral-100 p-4">
+        <div className="pb-4">
+          <Section
+            title="Recurring Services"
+            expected={recurring.expectedInPaise}
+            collected={recurring.collectedInPaise}
+            pending={recurring.pendingInPaise}
+            overdue={recurring.overdueInPaise}
+          />
         </div>
-
-        {/* Collection progress bar */}
-        <div className="mb-5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <p className="text-xs font-medium text-neutral-700">Collection Progress</p>
-            <span className="text-xs font-semibold text-neutral-900">{progressPct}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-all"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Breakdown */}
-        <div>
-          <p className="mb-2 text-xs font-medium text-neutral-700">Breakdown</p>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-neutral-600">
-                <span className="h-2 w-2 rounded-full bg-red-400" />
-                Overdue (all months)
-              </span>
-              <span className="font-medium text-red-600">{fmt(overdueInPaise)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-neutral-600">
-                <span className="h-2 w-2 rounded-full bg-amber-400" />
-                Due this month
-              </span>
-              <span className="font-medium text-amber-700">{fmt(pendingInPaise)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-neutral-600">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                Collected this month
-              </span>
-              <span className="font-medium text-emerald-700">{fmt(collectedInPaise)}</span>
-            </div>
-          </div>
+        <div className="pt-4">
+          <Section
+            title="One-Time Projects"
+            expected={projects.expectedInPaise}
+            collected={projects.collectedInPaise}
+            pending={projects.pendingInPaise}
+            overdue={projects.overdueInPaise}
+          />
         </div>
       </div>
     </div>

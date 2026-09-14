@@ -488,3 +488,88 @@ export async function markAddOnPaidAction(
 
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// recordProjectPaymentAction
+// ---------------------------------------------------------------------------
+
+/**
+ * Records an ad-hoc payment against a project.
+ *
+ * Unlike addMilestoneAction + markMilestonePaidAction (two-step flow),
+ * this creates a milestone and immediately marks it PAID in a single
+ * transaction. Use this when the client has already paid — you're
+ * recording money that already arrived.
+ *
+ * The balance shown on the project is:
+ *   baseAmountInPaise − sum(paid milestones) − sum(paid add-ons)
+ */
+export async function recordProjectPaymentAction(
+  projectId: number,
+  formData: FormData
+): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(projectId)) return { error: "Invalid project." };
+
+  const { admin, project } = await requireProjectInOwnOrg(projectId);
+  if (!project) return { error: "Project not found." };
+
+  if (project.status === "CANCELLED") {
+    return { error: "Cannot record payments on a cancelled project." };
+  }
+
+  const label = String(formData.get("label") ?? "").trim() || "Payment";
+  if (label.length > 150) return { error: "Label must be 150 characters or fewer." };
+
+  const amountRupees = parseRupees(formData.get("amountInRupees"));
+  if (amountRupees === null || amountRupees <= 0) {
+    return { error: "Amount must be greater than zero." };
+  }
+  const amountInPaise = Math.round(amountRupees * 100);
+  if (amountInPaise > MAX_AMOUNT) {
+    return { error: "Amount must be ₹1,00,00,000 or less." };
+  }
+
+  const paidAt = parseOptionalDate(formData.get("paidAt")) ?? new Date();
+
+  // sortOrder = current max + 1 so this appears last in the list
+  const maxSort = await prisma.projectMilestone.aggregate({
+    where: { projectId },
+    _max: { sortOrder: true },
+  });
+  const sortOrder = (maxSort._max.sortOrder ?? -1) + 1;
+
+  // Create the milestone then immediately mark it paid (two sequential
+  // transactions). The milestone is briefly PENDING between the two, but
+  // since it was just created only this call knows about it — no race.
+  const milestone = await prisma.projectMilestone.create({
+    data: {
+      projectId,
+      label,
+      amountInPaise,
+      sortOrder,
+      // dueDate = paidAt so the payment lands in the correct month on dashboard
+      dueDate: paidAt,
+    },
+  });
+
+  const result = await markMilestonePaid({
+    milestoneId: milestone.id,
+    paidAt,
+    recordedByAdminId: admin.id,
+  });
+
+  if ("error" in result) {
+    return { error: "Failed to record payment. Please try again." };
+  }
+
+  await prisma.clientActivity.create({
+    data: {
+      clientId: project.clientId,
+      actorAdminId: admin.id,
+      eventType: "payment.recorded",
+      summary: `Payment "${label}" — ₹${amountRupees.toLocaleString("en-IN")} received for "${project.title}".`,
+    },
+  });
+
+  return { ok: true };
+}

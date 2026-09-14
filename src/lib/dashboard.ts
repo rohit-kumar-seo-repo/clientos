@@ -57,10 +57,18 @@ export async function getAttentionData(
 }
 
 export type MonthlySummary = {
-  expectedInPaise: number;
-  collectedInPaise: number;
-  pendingInPaise: number;
-  overdueInPaise: number;
+  recurring: {
+    expectedInPaise: number;
+    collectedInPaise: number;
+    pendingInPaise: number;
+    overdueInPaise: number;
+  };
+  projects: {
+    expectedInPaise: number;  // project obligations due this month
+    collectedInPaise: number;
+    pendingInPaise: number;
+    overdueInPaise: number;
+  };
 };
 
 export async function getMonthlySummary(
@@ -183,12 +191,18 @@ export async function getMonthlySummary(
   );
 
   return {
-    expectedInPaise: expectedInPaise + projectExpectedInPaise,
-    collectedInPaise: collectedInPaise + projectCollectedInPaise,
-    pendingInPaise:
-      (expectedInPaise - collectedInPaise - overdueThisMonthInPaise) +
-      (projectExpectedInPaise - projectCollectedInPaise - projectOverdueThisMonthInPaise),
-    overdueInPaise: overdueInPaise + projectOverdueAllInPaise,
+    recurring: {
+      expectedInPaise,
+      collectedInPaise,
+      pendingInPaise: expectedInPaise - collectedInPaise - overdueThisMonthInPaise,
+      overdueInPaise,
+    },
+    projects: {
+      expectedInPaise: projectExpectedInPaise,
+      collectedInPaise: projectCollectedInPaise,
+      pendingInPaise: projectExpectedInPaise - projectCollectedInPaise - projectOverdueThisMonthInPaise,
+      overdueInPaise: projectOverdueAllInPaise,
+    },
   };
 }
 

@@ -150,7 +150,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.expectedInPaise).toBe(500000);
+    expect(summary.recurring.expectedInPaise).toBe(500000);
   });
 
   it("computes collected as payments captured against this month's periods", async () => {
@@ -177,7 +177,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.collectedInPaise).toBe(500000);
+    expect(summary.recurring.collectedInPaise).toBe(500000);
   });
 
   it("counts overdue money regardless of which month the period belongs to", async () => {
@@ -194,7 +194,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.overdueInPaise).toBeGreaterThanOrEqual(500000);
+    expect(summary.recurring.overdueInPaise).toBeGreaterThanOrEqual(500000);
   });
 
   it("pending excludes both collected and overdue amounts", async () => {
@@ -210,9 +210,9 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.pendingInPaise).toBe(700000);
-    expect(summary.overdueInPaise).toBe(0);
-    expect(summary.collectedInPaise).toBe(0);
+    expect(summary.recurring.pendingInPaise).toBe(700000);
+    expect(summary.recurring.overdueInPaise).toBe(0);
+    expect(summary.recurring.collectedInPaise).toBe(0);
   });
 
   it("never includes another organization's numbers", async () => {
@@ -232,7 +232,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.expectedInPaise).toBe(0);
+    expect(summary.recurring.expectedInPaise).toBe(0);
   });
 
   it("includes this month's project milestone in expectedInPaise", async () => {
@@ -251,8 +251,8 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.expectedInPaise).toBe(300000);
-    expect(summary.pendingInPaise).toBe(300000);
+    expect(summary.projects.expectedInPaise).toBe(300000);
+    expect(summary.projects.pendingInPaise).toBe(300000);
   });
 
   it("includes paid project milestone in collectedInPaise", async () => {
@@ -271,7 +271,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.collectedInPaise).toBe(300000);
+    expect(summary.projects.collectedInPaise).toBe(300000);
   });
 
   it("includes overdue project milestone in overdueInPaise", async () => {
@@ -290,7 +290,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.overdueInPaise).toBe(150000);
+    expect(summary.projects.overdueInPaise).toBe(150000);
   });
 
   it("excludes CANCELLED project from getMonthlySummary", async () => {
@@ -309,7 +309,7 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.expectedInPaise).toBe(0);
+    expect(summary.projects.expectedInPaise).toBe(0);
   });
 });
 
