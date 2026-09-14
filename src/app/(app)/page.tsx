@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/require-admin";
 import {
   getAttentionData,
   getMonthlySummary,
+  getProjectObligations,
   getRecentActivity,
   getWorkUpdates,
 } from "@/lib/dashboard";
@@ -36,11 +37,12 @@ export default async function OverviewPage() {
   const today = todayInIST();
   const todayISO = today.toISOString(); // safe to pass to client components
 
-  const [services, summary, recentActivity, workUpdates] = await Promise.all([
+  const [services, summary, recentActivity, workUpdates, projectObligations] = await Promise.all([
     getAttentionData(admin.organizationId, today),
     getMonthlySummary(admin.organizationId, today),
     getRecentActivity(admin.organizationId, 6),
     getWorkUpdates(admin.organizationId, today),
+    getProjectObligations(admin.organizationId, today),
   ]);
 
   return (
@@ -54,12 +56,12 @@ export default async function OverviewPage() {
       </div>
 
       {/* Row 1 — Attention summary cards (5 KPIs) */}
-      <AttentionSummary services={services} />
+      <AttentionSummary services={services} projectObligations={projectObligations} />
 
       {/* Row 2 — Attention list (left, wider) + Monthly summary (right) */}
       <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
-          <ClientAttentionList services={services} todayISO={todayISO} />
+          <ClientAttentionList services={services} projectObligations={projectObligations} todayISO={todayISO} />
         </div>
         <div className="lg:col-span-2">
           <MonthlySummary summary={summary} />

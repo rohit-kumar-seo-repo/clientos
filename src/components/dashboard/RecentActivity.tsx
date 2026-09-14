@@ -11,6 +11,13 @@ const EVENT_LABELS: Record<string, string> = {
   "client.updated": "Client updated",
   "contact.added": "Contact added",
   "note.added": "Note added",
+  // Project events
+  "project.created": "Project created",
+  "project.updated": "Project updated",
+  "project.milestone.added": "Milestone added",
+  "project.addon.added": "Add-on added",
+  "project.milestone.paid": "Milestone paid",
+  "project.addon.paid": "Add-on paid",
 };
 
 const EVENT_DOT_CLASS: Record<string, string> = {
@@ -23,6 +30,13 @@ const EVENT_DOT_CLASS: Record<string, string> = {
   "client.updated": "bg-neutral-400",
   "contact.added": "bg-neutral-400",
   "note.added": "bg-neutral-400",
+  // Project events
+  "project.created": "bg-violet-500",
+  "project.updated": "bg-violet-300",
+  "project.milestone.added": "bg-violet-400",
+  "project.addon.added": "bg-violet-400",
+  "project.milestone.paid": "bg-emerald-500",
+  "project.addon.paid": "bg-emerald-500",
 };
 
 function timeAgo(date: Date): string {

@@ -4,15 +4,38 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { RankedService } from "@/lib/attention";
+import type { ProjectObligationItem } from "@/lib/dashboard";
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 
-// Compute a specific issue label from tier + days data
-function issueLabel(service: RankedService, todayMs: number): string {
-  const { tier, daysOverdue, currentPeriod } = service;
+// Numeric rank for interleaved sorting across services and project obligations
+const TIER_RANK: Record<string, number> = {
+  overdue_payment: 1,
+  due_today: 2,
+  due_tomorrow: 3,
+  due_within_3_days: 4,
+  due_within_7_days: 5,
+  overdue_work: 6,
+  upcoming_renewal: 7,
+  normal_upcoming_work: 8,
+  no_action_required: 9,
+};
 
-  if (tier === "overdue_payment") {
+const TIER_BADGE_CLASS: Record<string, string> = {
+  overdue_payment: "bg-red-50 text-red-600",
+  due_today: "bg-amber-50 text-amber-700",
+  due_tomorrow: "bg-amber-50 text-amber-700",
+  due_within_3_days: "bg-amber-50 text-amber-700",
+  due_within_7_days: "bg-amber-50 text-amber-700",
+  overdue_work: "bg-indigo-50 text-indigo-600",
+  upcoming_renewal: "bg-indigo-50 text-indigo-600",
+  normal_upcoming_work: "bg-neutral-100 text-neutral-500",
+  no_action_required: "bg-emerald-50 text-emerald-700",
+};
+
+function serviceIssueLabel(service: RankedService, todayMs: number): string {
+  const { tier, daysOverdue, currentPeriod } = service;
+  if (tier === "overdue_payment")
     return `${daysOverdue} ${daysOverdue === 1 ? "day" : "days"} overdue`;
-  }
   if (tier === "due_today") return "Due today";
   if (tier === "due_tomorrow") return "Due tomorrow";
   if (tier === "due_within_3_days" || tier === "due_within_7_days") {
@@ -31,27 +54,76 @@ function issueLabel(service: RankedService, todayMs: number): string {
   return "On track";
 }
 
-const TIER_BADGE_CLASS: Record<string, string> = {
-  overdue_payment: "bg-red-50 text-red-600",
-  due_today: "bg-amber-50 text-amber-700",
-  due_tomorrow: "bg-amber-50 text-amber-700",
-  due_within_3_days: "bg-amber-50 text-amber-700",
-  due_within_7_days: "bg-amber-50 text-amber-700",
-  overdue_work: "bg-indigo-50 text-indigo-600",
-  upcoming_renewal: "bg-indigo-50 text-indigo-600",
-  normal_upcoming_work: "bg-neutral-100 text-neutral-500",
-  no_action_required: "bg-emerald-50 text-emerald-700",
-};
+function projectIssueLabel(item: ProjectObligationItem, todayMs: number): string {
+  const { tier, daysOverdue, dueDate } = item;
+  if (tier === "overdue_payment")
+    return `${daysOverdue} ${daysOverdue === 1 ? "day" : "days"} overdue`;
+  if (tier === "due_today") return "Due today";
+  if (tier === "due_tomorrow") return "Due tomorrow";
+  if (tier === "due_within_3_days" || tier === "due_within_7_days") {
+    const daysLeft = Math.round(
+      (new Date(dueDate).setUTCHours(0, 0, 0, 0) - todayMs) / 86_400_000
+    );
+    return `Due in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`;
+  }
+  return "Due soon";
+}
 
 export function ClientAttentionList({
   services,
+  projectObligations,
   todayISO,
 }: {
   services: RankedService[];
+  projectObligations: ProjectObligationItem[];
   todayISO: string;
 }) {
   const todayMs = new Date(todayISO).setUTCHours(0, 0, 0, 0);
-  const visible = services.filter((s) => s.tier !== "no_action_required");
+
+  // Merge services (filtered) and project obligations into one priority-sorted list
+  type Row =
+    | { type: "service"; data: RankedService; tierRank: number }
+    | { type: "project"; data: ProjectObligationItem; tierRank: number };
+
+  const visibleServices = services.filter((s) => s.tier !== "no_action_required");
+
+  const rows: Row[] = [
+    ...visibleServices.map((s) => ({
+      type: "service" as const,
+      data: s,
+      tierRank: TIER_RANK[s.tier] ?? 9,
+    })),
+    ...projectObligations.map((p) => ({
+      type: "project" as const,
+      data: p,
+      tierRank: TIER_RANK[p.tier] ?? 9,
+    })),
+  ];
+
+  rows.sort((a, b) => {
+    if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+    const daysOverdueA = a.type === "service" ? (a.data.daysOverdue ?? 0) : a.data.daysOverdue;
+    const daysOverdueB = b.type === "service" ? (b.data.daysOverdue ?? 0) : b.data.daysOverdue;
+    if (daysOverdueA !== daysOverdueB) return daysOverdueB - daysOverdueA;
+    const amtA =
+      a.type === "service" ? a.data.outstandingAmountInPaise : a.data.amountInPaise;
+    const amtB =
+      b.type === "service" ? b.data.outstandingAmountInPaise : b.data.amountInPaise;
+    if (amtA !== amtB) return amtB - amtA;
+    const dueA =
+      a.type === "service"
+        ? a.data.currentPeriod?.dueDate
+          ? new Date(a.data.currentPeriod.dueDate).getTime()
+          : Infinity
+        : a.data.dueDate.getTime();
+    const dueB =
+      b.type === "service"
+        ? b.data.currentPeriod?.dueDate
+          ? new Date(b.data.currentPeriod.dueDate).getTime()
+          : Infinity
+        : b.data.dueDate.getTime();
+    return dueA - dueB;
+  });
 
   return (
     <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
@@ -86,7 +158,7 @@ export function ClientAttentionList({
             <tr>
               <th className="px-3 py-2.5 font-medium text-xs">#</th>
               <th className="px-3 py-2.5 font-medium text-xs">Client</th>
-              <th className="px-3 py-2.5 font-medium text-xs">Service</th>
+              <th className="px-3 py-2.5 font-medium text-xs">Service / Project</th>
               <th className="px-3 py-2.5 font-medium text-xs">Issue</th>
               <th className="px-3 py-2.5 font-medium text-xs">Amount</th>
               <th className="px-3 py-2.5 font-medium text-xs whitespace-nowrap">Due Date</th>
@@ -94,15 +166,24 @@ export function ClientAttentionList({
             </tr>
           </thead>
           <tbody>
-            {visible.map((service, idx) => (
-              <AttentionRow
-                key={service.clientServiceId}
-                service={service}
-                rowNum={idx + 1}
-                todayMs={todayMs}
-              />
-            ))}
-            {visible.length === 0 && (
+            {rows.map((row, idx) =>
+              row.type === "service" ? (
+                <ServiceAttentionRow
+                  key={`svc-${row.data.clientServiceId}`}
+                  service={row.data}
+                  rowNum={idx + 1}
+                  todayMs={todayMs}
+                />
+              ) : (
+                <ProjectObligationRow
+                  key={`proj-${row.data.kind}-${row.data.id}`}
+                  item={row.data}
+                  rowNum={idx + 1}
+                  todayMs={todayMs}
+                />
+              )
+            )}
+            {rows.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-neutral-400 text-xs">
                   Nothing needs attention right now.
@@ -116,7 +197,7 @@ export function ClientAttentionList({
   );
 }
 
-function AttentionRow({
+function ServiceAttentionRow({
   service,
   rowNum,
   todayMs,
@@ -129,11 +210,12 @@ function AttentionRow({
   const [showMarkPaid, setShowMarkPaid] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const period = service.currentPeriod;
-  const label = issueLabel(service, todayMs);
+  const label = serviceIssueLabel(service, todayMs);
   const badgeClass = TIER_BADGE_CLASS[service.tier] ?? "bg-neutral-100 text-neutral-500";
 
   const hasPaymentAction =
-    period && period.status !== "PAID" &&
+    period &&
+    period.status !== "PAID" &&
     ["overdue_payment", "due_today", "due_tomorrow", "due_within_3_days", "due_within_7_days"].includes(
       service.tier
     );
@@ -152,33 +234,44 @@ function AttentionRow({
 
   return (
     <>
-      {/* ── Data row — always fixed height, never distorted ── */}
-      <tr className={`border-b ${showMarkPaid ? "border-neutral-200" : "border-neutral-100 last:border-0"} hover:bg-neutral-50`}>
+      <tr
+        className={`border-b ${showMarkPaid ? "border-neutral-200" : "border-neutral-100 last:border-0"} hover:bg-neutral-50`}
+      >
         <td className="px-3 py-3 text-xs text-neutral-400">{rowNum}</td>
         <td className="px-3 py-3 font-medium text-neutral-900 truncate">
-          <Link href={`/clients/${service.clientId}`} className="hover:underline" title={service.clientName}>
+          <Link
+            href={`/clients/${service.clientId}`}
+            className="hover:underline"
+            title={service.clientName}
+          >
             {service.clientName}
           </Link>
         </td>
-        <td className="px-3 py-3 text-neutral-700 truncate" title={service.serviceName}>{service.serviceName}</td>
+        <td className="px-3 py-3 text-neutral-700 truncate" title={service.serviceName}>
+          {service.serviceName}
+        </td>
         <td className="px-3 py-3">
           <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
             {label}
           </span>
         </td>
         <td className="px-3 py-3 text-neutral-900 font-medium">
-          {service.outstandingAmountInPaise > 0
-            ? `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
-            : <span className="text-neutral-400">—</span>}
+          {service.outstandingAmountInPaise > 0 ? (
+            `₹${(service.outstandingAmountInPaise / 100).toLocaleString("en-IN")}`
+          ) : (
+            <span className="text-neutral-400">—</span>
+          )}
         </td>
         <td className="px-3 py-3 text-neutral-600 whitespace-nowrap">
-          {period
-            ? new Date(period.dueDate).toLocaleDateString("en-IN", {
-                day: "numeric",
-                month: "short",
-                year: "numeric",
-              })
-            : <span className="text-neutral-400">—</span>}
+          {period ? (
+            new Date(period.dueDate).toLocaleDateString("en-IN", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            })
+          ) : (
+            <span className="text-neutral-400">—</span>
+          )}
         </td>
         <td className="px-3 py-3">
           <div className="flex items-center gap-1.5">
@@ -200,12 +293,10 @@ function AttentionRow({
                 →
               </Link>
             )}
-            {/* View link removed: client name in col 2 is already a link */}
           </div>
         </td>
       </tr>
 
-      {/* ── Form row — spans all columns, no layout distortion ── */}
       {showMarkPaid && (
         <tr className="border-b border-neutral-100 last:border-0 bg-neutral-50">
           <td colSpan={7} className="px-4 py-3">
@@ -223,6 +314,62 @@ function AttentionRow({
   );
 }
 
+function ProjectObligationRow({
+  item,
+  rowNum,
+  todayMs,
+}: {
+  item: ProjectObligationItem;
+  rowNum: number;
+  todayMs: number;
+}) {
+  const label = projectIssueLabel(item, todayMs);
+  const badgeClass = TIER_BADGE_CLASS[item.tier] ?? "bg-neutral-100 text-neutral-500";
+  const displayName = `${item.projectTitle} — ${item.label}`;
+
+  return (
+    <tr className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+      <td className="px-3 py-3 text-xs text-neutral-400">{rowNum}</td>
+      <td className="px-3 py-3 font-medium text-neutral-900 truncate">
+        <Link
+          href={`/clients/${item.clientId}`}
+          className="hover:underline"
+          title={item.clientName}
+        >
+          {item.clientName}
+        </Link>
+      </td>
+      <td className="px-3 py-3 text-neutral-700 truncate" title={displayName}>
+        {displayName}
+      </td>
+      <td className="px-3 py-3">
+        <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs ${badgeClass}`}>
+          {label}
+        </span>
+      </td>
+      <td className="px-3 py-3 text-neutral-900 font-medium">
+        {`₹${(item.amountInPaise / 100).toLocaleString("en-IN")}`}
+      </td>
+      <td className="px-3 py-3 text-neutral-600 whitespace-nowrap">
+        {new Date(item.dueDate).toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })}
+      </td>
+      <td className="px-3 py-3">
+        <Link
+          href={`/clients/${item.clientId}`}
+          className="text-sm text-neutral-400 hover:text-neutral-900"
+          title="Open client"
+        >
+          →
+        </Link>
+      </td>
+    </tr>
+  );
+}
+
 function MarkPaidInlineForm({
   amountInPaise,
   onSubmit,
@@ -236,10 +383,7 @@ function MarkPaidInlineForm({
   onCancel: () => void;
 }) {
   return (
-    <form
-      action={onSubmit}
-      className="flex items-end gap-4"
-    >
+    <form action={onSubmit} className="flex items-end gap-4">
       {error && <p className="text-xs text-red-600">{error}</p>}
       <label className="flex flex-col gap-1">
         <span className="text-xs text-neutral-500">Amount (₹)</span>

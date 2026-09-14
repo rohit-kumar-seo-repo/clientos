@@ -69,6 +69,8 @@ export async function getMonthlySummary(
 ): Promise<MonthlySummary> {
   const label = currentPeriodLabel(today);
   const normalizedToday = startOfUTCDay(today);
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
 
   // I1: scope to ACTIVE services only — mirrors getAttentionData's filter so the
   // Monthly Summary's Overdue figure can never contradict the Attention section's
@@ -130,9 +132,188 @@ export async function getMonthlySummary(
   });
   const overdueInPaise = allOverduePeriods.reduce((sum, p) => sum + p.amountInPaise, 0);
 
-  const pendingInPaise = expectedInPaise - collectedInPaise - overdueThisMonthInPaise;
+  // ── Project obligations (milestones + add-ons) ─────────────────────────────
+  // Shared filter: exclude CANCELLED projects; scope to org via client.
+  const projectFilter = {
+    client: { organizationId },
+    status: { not: "CANCELLED" as const },
+  };
 
-  return { expectedInPaise, collectedInPaise, pendingInPaise, overdueInPaise };
+  const [thisMonthMilestones, thisMonthAddOns, allOverdueMilestones, allOverdueAddOns] =
+    await Promise.all([
+      prisma.projectMilestone.findMany({
+        where: { dueDate: { gte: monthStart, lt: monthEnd }, project: projectFilter },
+        select: { amountInPaise: true, status: true, dueDate: true },
+      }),
+      prisma.projectAddOn.findMany({
+        where: { dueDate: { gte: monthStart, lt: monthEnd }, project: projectFilter },
+        select: { amountInPaise: true, status: true, dueDate: true },
+      }),
+      prisma.projectMilestone.findMany({
+        where: { status: "PENDING", dueDate: { lt: normalizedToday }, project: projectFilter },
+        select: { amountInPaise: true },
+      }),
+      prisma.projectAddOn.findMany({
+        where: { status: "PENDING", dueDate: { lt: normalizedToday }, project: projectFilter },
+        select: { amountInPaise: true },
+      }),
+    ]);
+
+  const allProjectThisMonth = [...thisMonthMilestones, ...thisMonthAddOns];
+
+  // Expected: all project obligations due this month (paid or pending)
+  const projectExpectedInPaise = allProjectThisMonth.reduce((s, o) => s + o.amountInPaise, 0);
+
+  // Collected: amount-integrity holds (payment === obligation amount), so PAID = collected
+  const projectCollectedInPaise = allProjectThisMonth
+    .filter((o) => o.status === "PAID")
+    .reduce((s, o) => s + o.amountInPaise, 0);
+
+  // Overdue this month: PENDING and past due — used for pending calc (no double-counting)
+  const projectOverdueThisMonthInPaise = allProjectThisMonth
+    .filter(
+      (o) => o.status === "PENDING" && o.dueDate !== null && new Date(o.dueDate) < normalizedToday
+    )
+    .reduce((s, o) => s + o.amountInPaise, 0);
+
+  // Overdue all time: feeds the Overdue card (same cross-month scope as recurring)
+  const projectOverdueAllInPaise = [...allOverdueMilestones, ...allOverdueAddOns].reduce(
+    (s, o) => s + o.amountInPaise,
+    0
+  );
+
+  return {
+    expectedInPaise: expectedInPaise + projectExpectedInPaise,
+    collectedInPaise: collectedInPaise + projectCollectedInPaise,
+    pendingInPaise:
+      (expectedInPaise - collectedInPaise - overdueThisMonthInPaise) +
+      (projectExpectedInPaise - projectCollectedInPaise - projectOverdueThisMonthInPaise),
+    overdueInPaise: overdueInPaise + projectOverdueAllInPaise,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Project obligations — PENDING milestones/add-ons due within 7 days or overdue
+// ---------------------------------------------------------------------------
+
+type PaymentTier =
+  | "overdue_payment"
+  | "due_today"
+  | "due_tomorrow"
+  | "due_within_3_days"
+  | "due_within_7_days";
+
+export type ProjectObligationItem = {
+  id: number;
+  kind: "milestone" | "addon";
+  clientId: number;
+  clientName: string;
+  projectTitle: string;
+  label: string;        // milestone.label or addon.description
+  amountInPaise: number;
+  dueDate: Date;
+  tier: PaymentTier;
+  daysOverdue: number;  // positive when overdue, 0 otherwise
+};
+
+function paymentTierForDays(daysToDue: number): PaymentTier | null {
+  if (daysToDue < 0) return "overdue_payment";
+  if (daysToDue === 0) return "due_today";
+  if (daysToDue === 1) return "due_tomorrow";
+  if (daysToDue <= 3) return "due_within_3_days";
+  if (daysToDue <= 7) return "due_within_7_days";
+  return null; // > 7 days: not attention-worthy for payment
+}
+
+const OBLIGATION_TIER_RANK: Record<string, number> = {
+  overdue_payment: 1,
+  due_today: 2,
+  due_tomorrow: 3,
+  due_within_3_days: 4,
+  due_within_7_days: 5,
+};
+
+export async function getProjectObligations(
+  organizationId: number,
+  today: Date
+): Promise<ProjectObligationItem[]> {
+  const todayMs = startOfUTCDay(today).getTime();
+  const projectFilter = {
+    client: { organizationId },
+    status: { not: "CANCELLED" as const },
+  };
+
+  const [milestones, addOns] = await Promise.all([
+    prisma.projectMilestone.findMany({
+      where: { status: "PENDING", dueDate: { not: null }, project: projectFilter },
+      include: {
+        project: { include: { client: { select: { id: true, businessName: true } } } },
+      },
+    }),
+    prisma.projectAddOn.findMany({
+      where: { status: "PENDING", dueDate: { not: null }, project: projectFilter },
+      include: {
+        project: { include: { client: { select: { id: true, businessName: true } } } },
+      },
+    }),
+  ]);
+
+  const items: ProjectObligationItem[] = [];
+
+  for (const m of milestones) {
+    const dueDate = m.dueDate;
+    if (!dueDate) continue;
+    const daysToDue = Math.round(
+      (new Date(dueDate).setUTCHours(0, 0, 0, 0) - todayMs) / 86_400_000
+    );
+    const tier = paymentTierForDays(daysToDue);
+    if (!tier) continue;
+    items.push({
+      id: m.id,
+      kind: "milestone",
+      clientId: m.project.client.id,
+      clientName: m.project.client.businessName,
+      projectTitle: m.project.title,
+      label: m.label,
+      amountInPaise: m.amountInPaise,
+      dueDate,
+      tier,
+      daysOverdue: daysToDue < 0 ? -daysToDue : 0,
+    });
+  }
+
+  for (const a of addOns) {
+    const dueDate = a.dueDate;
+    if (!dueDate) continue;
+    const daysToDue = Math.round(
+      (new Date(dueDate).setUTCHours(0, 0, 0, 0) - todayMs) / 86_400_000
+    );
+    const tier = paymentTierForDays(daysToDue);
+    if (!tier) continue;
+    items.push({
+      id: a.id,
+      kind: "addon",
+      clientId: a.project.client.id,
+      clientName: a.project.client.businessName,
+      projectTitle: a.project.title,
+      label: a.description,
+      amountInPaise: a.amountInPaise,
+      dueDate,
+      tier,
+      daysOverdue: daysToDue < 0 ? -daysToDue : 0,
+    });
+  }
+
+  items.sort((a, b) => {
+    const ra = OBLIGATION_TIER_RANK[a.tier] ?? 9;
+    const rb = OBLIGATION_TIER_RANK[b.tier] ?? 9;
+    if (ra !== rb) return ra - rb;
+    if (a.daysOverdue !== b.daysOverdue) return b.daysOverdue - a.daysOverdue;
+    if (a.amountInPaise !== b.amountInPaise) return b.amountInPaise - a.amountInPaise;
+    return a.dueDate.getTime() - b.dueDate.getTime();
+  });
+
+  return items;
 }
 
 // ---------------------------------------------------------------------------

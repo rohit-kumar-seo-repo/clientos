@@ -1,23 +1,42 @@
 import type { RankedService } from "@/lib/attention";
-
-function uniqueClients(services: RankedService[]): number {
-  return new Set(services.map((s) => s.clientId)).size;
-}
-
-function totalAmount(services: RankedService[]): number {
-  return services.reduce((sum, s) => sum + s.outstandingAmountInPaise, 0);
-}
+import type { ProjectObligationItem } from "@/lib/dashboard";
 
 function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN")}`;
 }
 
-export function AttentionSummary({ services }: { services: RankedService[] }) {
+function uniqueClientCount(serviceClientIds: number[], projClientIds: number[]): number {
+  return new Set([...serviceClientIds, ...projClientIds]).size;
+}
+
+function serviceTotal(services: RankedService[]): number {
+  return services.reduce((sum, s) => sum + s.outstandingAmountInPaise, 0);
+}
+
+function projTotal(items: ProjectObligationItem[]): number {
+  return items.reduce((sum, p) => sum + p.amountInPaise, 0);
+}
+
+export function AttentionSummary({
+  services,
+  projectObligations,
+}: {
+  services: RankedService[];
+  projectObligations: ProjectObligationItem[];
+}) {
   const overduePay = services.filter((s) => s.tier === "overdue_payment");
+  const overduePayProj = projectObligations.filter((p) => p.tier === "overdue_payment");
+
   const dueToday = services.filter((s) => s.tier === "due_today");
+  const dueTodayProj = projectObligations.filter((p) => p.tier === "due_today");
+
   const dueNext3 = services.filter((s) =>
     ["due_tomorrow", "due_within_3_days"].includes(s.tier)
   );
+  const dueNext3Proj = projectObligations.filter((p) =>
+    ["due_tomorrow", "due_within_3_days"].includes(p.tier)
+  );
+
   const workAttention = services.filter((s) => s.tier === "overdue_work");
   const renewals = services.filter((s) => s.tier === "upcoming_renewal");
 
@@ -27,10 +46,14 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
       <div className="rounded-xl border border-red-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Overdue Payments</p>
         <p className="text-2xl font-semibold text-red-600">
-          {overduePay.length > 0 ? fmt(totalAmount(overduePay)) : "₹0"}
+          {overduePay.length + overduePayProj.length > 0
+            ? fmt(serviceTotal(overduePay) + projTotal(overduePayProj))
+            : "₹0"}
         </p>
         <p className="mt-1 text-xs text-neutral-400">
-          {uniqueClients(overduePay)} {uniqueClients(overduePay) === 1 ? "client" : "clients"} &middot; {overduePay.length} {overduePay.length === 1 ? "service" : "services"}
+          {uniqueClientCount(overduePay.map(s => s.clientId), overduePayProj.map(p => p.clientId))}{" "}
+          clients &middot;{" "}
+          {overduePay.length + overduePayProj.length} items
         </p>
       </div>
 
@@ -38,10 +61,14 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
       <div className="rounded-xl border border-amber-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Due Today</p>
         <p className="text-2xl font-semibold text-amber-600">
-          {dueToday.length > 0 ? fmt(totalAmount(dueToday)) : "₹0"}
+          {dueToday.length + dueTodayProj.length > 0
+            ? fmt(serviceTotal(dueToday) + projTotal(dueTodayProj))
+            : "₹0"}
         </p>
         <p className="mt-1 text-xs text-neutral-400">
-          {uniqueClients(dueToday)} {uniqueClients(dueToday) === 1 ? "client" : "clients"} &middot; {dueToday.length} {dueToday.length === 1 ? "service" : "services"}
+          {uniqueClientCount(dueToday.map(s => s.clientId), dueTodayProj.map(p => p.clientId))}{" "}
+          clients &middot;{" "}
+          {dueToday.length + dueTodayProj.length} items
         </p>
       </div>
 
@@ -49,14 +76,18 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
       <div className="rounded-xl border border-neutral-200 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Due Next 3 Days</p>
         <p className="text-2xl font-semibold text-amber-500">
-          {dueNext3.length > 0 ? fmt(totalAmount(dueNext3)) : "₹0"}
+          {dueNext3.length + dueNext3Proj.length > 0
+            ? fmt(serviceTotal(dueNext3) + projTotal(dueNext3Proj))
+            : "₹0"}
         </p>
         <p className="mt-1 text-xs text-neutral-400">
-          {uniqueClients(dueNext3)} {uniqueClients(dueNext3) === 1 ? "client" : "clients"} &middot; {dueNext3.length} {dueNext3.length === 1 ? "service" : "services"}
+          {uniqueClientCount(dueNext3.map(s => s.clientId), dueNext3Proj.map(p => p.clientId))}{" "}
+          clients &middot;{" "}
+          {dueNext3.length + dueNext3Proj.length} items
         </p>
       </div>
 
-      {/* Work Needs Attention */}
+      {/* Work Needs Attention — recurring only, no change */}
       <div className="rounded-xl border border-neutral-200 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Work Attention</p>
         <p className="text-2xl font-semibold text-indigo-600">{workAttention.length}</p>
@@ -65,7 +96,7 @@ export function AttentionSummary({ services }: { services: RankedService[] }) {
         </p>
       </div>
 
-      {/* Upcoming Renewals */}
+      {/* Upcoming Renewals — recurring only, no change */}
       <div className="rounded-xl border border-neutral-200 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Upcoming Renewals</p>
         <p className="text-2xl font-semibold text-neutral-700">{renewals.length}</p>

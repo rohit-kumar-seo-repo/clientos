@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { resetDb } from "@/lib/test-db";
 import { createClientService } from "@/lib/services";
 import { markBillingPeriodPaid } from "@/lib/payments";
-import { getAttentionData, getMonthlySummary } from "@/lib/dashboard";
+import { getAttentionData, getMonthlySummary, getProjectObligations } from "@/lib/dashboard";
 
 const TODAY = new Date(Date.UTC(2026, 8, 10)); // Sep 10, 2026
 
@@ -233,5 +233,200 @@ describe("getMonthlySummary", () => {
     const summary = await getMonthlySummary(orgId, TODAY);
 
     expect(summary.expectedInPaise).toBe(0);
+  });
+
+  it("includes this month's project milestone in expectedInPaise", async () => {
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 300000,
+        dueDate: new Date(Date.UTC(2026, 8, 15)), // Sep 15 — this month, not yet overdue
+        status: "PENDING",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.expectedInPaise).toBe(300000);
+    expect(summary.pendingInPaise).toBe(300000);
+  });
+
+  it("includes paid project milestone in collectedInPaise", async () => {
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 300000,
+        dueDate: new Date(Date.UTC(2026, 8, 5)), // Sep 5 — this month, PAID
+        status: "PAID",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.collectedInPaise).toBe(300000);
+  });
+
+  it("includes overdue project milestone in overdueInPaise", async () => {
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 150000,
+        dueDate: new Date(Date.UTC(2026, 7, 15)), // Aug 15 — prior month, PENDING → overdue
+        status: "PENDING",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.overdueInPaise).toBe(150000);
+  });
+
+  it("excludes CANCELLED project from getMonthlySummary", async () => {
+    const project = await prisma.project.create({
+      data: { clientId, title: "Cancelled Project", status: "CANCELLED", baseAmountInPaise: 999999 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 999999,
+        dueDate: new Date(Date.UTC(2026, 8, 15)), // Sep 15 — this month
+        status: "PENDING",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.expectedInPaise).toBe(0);
+  });
+});
+
+describe("getProjectObligations", () => {
+  let orgId: number;
+  let clientId: number;
+  let projectId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const client = await prisma.client.create({
+      data: { organizationId: orgId, businessName: "ABC Interiors" },
+    });
+    clientId = client.id;
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1_000_000 },
+    });
+    projectId = project.id;
+  });
+
+  it("returns overdue milestone with correct tier and daysOverdue", async () => {
+    await prisma.projectMilestone.create({
+      data: {
+        projectId,
+        label: "Design mockups",
+        amountInPaise: 200000,
+        dueDate: new Date(Date.UTC(2026, 8, 5)), // Sep 5 — 5 days before TODAY
+        status: "PENDING",
+      },
+    });
+
+    const items = await getProjectObligations(orgId, TODAY);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].tier).toBe("overdue_payment");
+    expect(items[0].daysOverdue).toBe(5);
+    expect(items[0].kind).toBe("milestone");
+    expect(items[0].amountInPaise).toBe(200000);
+  });
+
+  it("excludes milestone due more than 7 days away", async () => {
+    await prisma.projectMilestone.create({
+      data: {
+        projectId,
+        label: "Launch",
+        amountInPaise: 300000,
+        dueDate: new Date(Date.UTC(2026, 8, 20)), // Sep 20 — 10 days away
+        status: "PENDING",
+      },
+    });
+
+    const items = await getProjectObligations(orgId, TODAY);
+
+    expect(items).toHaveLength(0);
+  });
+
+  it("excludes obligations from CANCELLED projects", async () => {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { status: "CANCELLED" },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId,
+        label: "Design mockups",
+        amountInPaise: 200000,
+        dueDate: new Date(Date.UTC(2026, 8, 10)), // today
+        status: "PENDING",
+      },
+    });
+
+    const items = await getProjectObligations(orgId, TODAY);
+
+    expect(items).toHaveLength(0);
+  });
+
+  it("returns add-on due within 3 days with correct tier", async () => {
+    await prisma.projectAddOn.create({
+      data: {
+        projectId,
+        description: "Extra revisions",
+        amountInPaise: 50000,
+        dueDate: new Date(Date.UTC(2026, 8, 12)), // Sep 12 — 2 days away
+        status: "PENDING",
+      },
+    });
+
+    const items = await getProjectObligations(orgId, TODAY);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].tier).toBe("due_within_3_days");
+    expect(items[0].kind).toBe("addon");
+    expect(items[0].daysOverdue).toBe(0);
+  });
+
+  it("never returns another organization's project obligations", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const otherClient = await prisma.client.create({
+      data: { organizationId: otherOrg.id, businessName: "Other Client" },
+    });
+    const otherProject = await prisma.project.create({
+      data: { clientId: otherClient.id, title: "Other Project", status: "IN_PROGRESS", baseAmountInPaise: 100 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: otherProject.id,
+        label: "Design mockups",
+        amountInPaise: 999999,
+        dueDate: new Date(Date.UTC(2026, 8, 10)), // today
+        status: "PENDING",
+      },
+    });
+
+    const items = await getProjectObligations(orgId, TODAY);
+
+    expect(items).toHaveLength(0);
   });
 });
