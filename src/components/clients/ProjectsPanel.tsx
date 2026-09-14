@@ -10,6 +10,8 @@ import {
   addAddOnAction,
   markMilestonePaidAction,
   markAddOnPaidAction,
+  updateMilestoneAction,
+  deleteMilestoneAction,
 } from "@/app/(app)/clients/project-actions";
 
 type ProjectWithObligations = Project & {
@@ -523,18 +525,33 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
 
 function MilestoneRow({ milestone }: { milestone: ProjectMilestone }) {
   const router = useRouter();
-  const [showMarkPaid, setShowMarkPaid] = useState(false);
-  const [markPaidError, setMarkPaidError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"idle" | "edit" | "delete" | "markPaid">("idle");
+  const [error, setError] = useState<string | null>(null);
   const isPaid = milestone.status === "PAID";
+
+  function reset() {
+    setMode("idle");
+    setError(null);
+  }
 
   async function handleMarkPaid(formData: FormData) {
     const result = await markMilestonePaidAction(milestone.id, formData);
-    if ("error" in result) {
-      setMarkPaidError(result.error);
-      return;
-    }
-    setMarkPaidError(null);
-    setShowMarkPaid(false);
+    if ("error" in result) { setError(result.error); return; }
+    reset();
+    router.refresh();
+  }
+
+  async function handleEdit(formData: FormData) {
+    const result = await updateMilestoneAction(milestone.id, formData);
+    if ("error" in result) { setError(result.error); return; }
+    reset();
+    router.refresh();
+  }
+
+  async function handleDelete() {
+    const result = await deleteMilestoneAction(milestone.id);
+    if ("error" in result) { setError(result.error); return; }
+    reset();
     router.refresh();
   }
 
@@ -551,10 +568,29 @@ function MilestoneRow({ milestone }: { milestone: ProjectMilestone }) {
         )}
         <div className="ml-auto flex items-center gap-1.5">
           <ObligationStatusBadge status={milestone.status} />
+          {/* Edit always available */}
+          <button
+            type="button"
+            onClick={() => mode === "edit" ? reset() : (setMode("edit"), setError(null))}
+            className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-neutral-700 hover:bg-neutral-50"
+          >
+            {mode === "edit" ? "Close" : "Edit"}
+          </button>
+          {/* Delete only for PENDING */}
           {!isPaid && (
             <button
               type="button"
-              onClick={() => setShowMarkPaid((v) => !v)}
+              onClick={() => mode === "delete" ? reset() : (setMode("delete"), setError(null))}
+              className="rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-red-700 hover:bg-red-100"
+            >
+              Delete
+            </button>
+          )}
+          {/* Mark Paid only for PENDING */}
+          {!isPaid && (
+            <button
+              type="button"
+              onClick={() => mode === "markPaid" ? reset() : (setMode("markPaid"), setError(null))}
               className="rounded-md bg-neutral-900 px-2 py-0.5 text-white hover:bg-neutral-800"
             >
               Mark Paid
@@ -562,14 +598,96 @@ function MilestoneRow({ milestone }: { milestone: ProjectMilestone }) {
           )}
         </div>
       </div>
-      {showMarkPaid && (
+
+      {/* Edit form */}
+      {mode === "edit" && (
+        <form
+          action={handleEdit}
+          className="mt-2 space-y-2 rounded border border-neutral-200 bg-neutral-50 p-2"
+        >
+          {error && <p className="text-red-600">{error}</p>}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <label className="mb-0.5 block text-neutral-600">Label</label>
+              <input
+                name="label"
+                type="text"
+                defaultValue={milestone.label}
+                required
+                className="w-full rounded border border-neutral-300 px-2 py-0.5 text-xs"
+              />
+            </div>
+            {/* Amount only editable when PENDING */}
+            {!isPaid && (
+              <div>
+                <label className="mb-0.5 block text-neutral-600">Amount (₹)</label>
+                <input
+                  name="amountInRupees"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  defaultValue={(milestone.amountInPaise / 100).toFixed(2)}
+                  className="w-full rounded border border-neutral-300 px-2 py-0.5 text-xs"
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-0.5 block text-neutral-600">Due date</label>
+              <input
+                name="dueDate"
+                type="date"
+                defaultValue={toDateInput(milestone.dueDate)}
+                className="w-full rounded border border-neutral-300 px-2 py-0.5 text-xs"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-lg bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-neutral-800"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Delete confirm */}
+      {mode === "delete" && (
+        <div className="mt-2 flex items-center gap-2 rounded border border-red-200 bg-red-50 p-2">
+          {error && <p className="text-red-600">{error}</p>}
+          {!error && <span className="text-neutral-700">Delete &quot;{milestone.label}&quot;?</span>}
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700"
+          >
+            Confirm Delete
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Mark Paid form */}
+      {mode === "markPaid" && (
         <form
           action={handleMarkPaid}
           className="mt-2 flex items-end gap-2 rounded border border-neutral-200 bg-neutral-50 p-2"
         >
-          {markPaidError && (
-            <p className="w-full text-red-600">{markPaidError}</p>
-          )}
+          {error && <p className="w-full text-red-600">{error}</p>}
           <div>
             <label className="mb-0.5 block text-neutral-600">Date</label>
             <input
@@ -588,7 +706,7 @@ function MilestoneRow({ milestone }: { milestone: ProjectMilestone }) {
           </button>
           <button
             type="button"
-            onClick={() => setShowMarkPaid(false)}
+            onClick={reset}
             className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
           >
             Cancel

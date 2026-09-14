@@ -8,6 +8,7 @@ import { ProjectsPanel } from "@/components/clients/ProjectsPanel";
 import { ContactsPanel } from "@/components/clients/ContactsPanel";
 import { NotesPanel } from "@/components/clients/NotesPanel";
 import { PaymentHistoryPanel } from "@/components/clients/PaymentHistoryPanel";
+import { DeleteClientButton } from "@/components/clients/DeleteClientButton";
 
 export default async function ClientDetailPage({
   params,
@@ -48,6 +49,7 @@ export default async function ClientDetailPage({
         >
           Edit
         </Link>
+        <DeleteClientButton clientId={client.id} />
       </div>
       <p className="mb-6 text-sm text-neutral-500">{client.status}</p>
 

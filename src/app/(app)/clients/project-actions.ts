@@ -272,6 +272,126 @@ export async function addAddOnAction(
 }
 
 // ---------------------------------------------------------------------------
+// updateMilestoneAction
+// ---------------------------------------------------------------------------
+
+/**
+ * Edits a project milestone.
+ *
+ * UNPAID milestones: label, amount, and dueDate are all editable.
+ * PAID milestones: only label and dueDate can change — the amount is locked
+ * because an InvoiceLineItem already records that exact figure against a
+ * Payment. Changing it would create a discrepancy between the milestone and
+ * its historical payment record.
+ */
+export async function updateMilestoneAction(
+  milestoneId: number,
+  formData: FormData
+): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(milestoneId)) return { error: "Milestone not found." };
+
+  const { admin, milestone } = await requireMilestoneInOwnOrg(milestoneId);
+  if (!milestone) return { error: "Milestone not found." };
+
+  const isPaid = milestone.status === "PAID";
+
+  const label = String(formData.get("label") ?? "").trim();
+  if (label.length > 150) return { error: "Label must be 150 characters or fewer." };
+
+  // Paid milestones: reject any attempt to change the amount
+  if (isPaid && formData.has("amountInRupees")) {
+    const submitted = parseRupees(formData.get("amountInRupees"));
+    const current = milestone.amountInPaise / 100;
+    if (submitted !== null && Math.round(submitted * 100) !== milestone.amountInPaise) {
+      return { error: `Cannot change the amount of a paid milestone (currently ₹${current.toLocaleString("en-IN")}). The payment record must be preserved.` };
+    }
+  }
+
+  let amountInPaise: number | undefined;
+  if (!isPaid && formData.has("amountInRupees")) {
+    const amountRupees = parseRupees(formData.get("amountInRupees"));
+    if (amountRupees === null || amountRupees <= 0) {
+      return { error: "Amount must be greater than zero." };
+    }
+    amountInPaise = Math.round(amountRupees * 100);
+    if (amountInPaise > MAX_AMOUNT) {
+      return { error: "Amount must be ₹1,00,00,000 or less." };
+    }
+  }
+
+  const dueDate = formData.has("dueDate")
+    ? parseOptionalDate(formData.get("dueDate"))
+    : undefined;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.projectMilestone.update({
+      where: { id: milestoneId },
+      data: {
+        ...(label ? { label } : {}),
+        ...(amountInPaise !== undefined ? { amountInPaise } : {}),
+        ...(formData.has("dueDate") ? { dueDate } : {}),
+      },
+    });
+    await tx.clientActivity.create({
+      data: {
+        clientId: milestone.project.clientId,
+        actorAdminId: admin.id,
+        eventType: "project.updated",
+        summary: `Milestone "${label || milestone.label}" updated.`,
+      },
+    });
+  });
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// deleteMilestoneAction
+// ---------------------------------------------------------------------------
+
+/**
+ * Deletes a PENDING milestone.
+ *
+ * A PAID milestone cannot be deleted — its InvoiceLineItem and Payment
+ * records are financial history that must be preserved.
+ */
+export async function deleteMilestoneAction(
+  milestoneId: number
+): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(milestoneId)) return { error: "Milestone not found." };
+
+  const { admin, milestone } = await requireMilestoneInOwnOrg(milestoneId);
+  if (!milestone) return { error: "Milestone not found." };
+
+  if (milestone.status === "PAID") {
+    return { error: "Cannot delete a paid milestone — its payment record must be preserved." };
+  }
+
+  // Verify no InvoiceLineItem references this milestone (should be impossible
+  // for a PENDING milestone, but guard explicitly to be safe).
+  const lineItem = await prisma.invoiceLineItem.findFirst({
+    where: { projectMilestoneId: milestoneId },
+  });
+  if (lineItem) {
+    return { error: "This milestone has an associated payment record and cannot be deleted." };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.projectMilestone.delete({ where: { id: milestoneId } });
+    await tx.clientActivity.create({
+      data: {
+        clientId: milestone.project.clientId,
+        actorAdminId: admin.id,
+        eventType: "project.updated",
+        summary: `Milestone "${milestone.label}" deleted from "${milestone.project.title}".`,
+      },
+    });
+  });
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // markMilestonePaidAction
 // ---------------------------------------------------------------------------
 

@@ -325,7 +325,7 @@ describe("addContactAction / removeContactAction", () => {
   });
 });
 
-import { addNoteAction } from "@/app/(app)/clients/actions";
+import { addNoteAction, deleteClientAction } from "@/app/(app)/clients/actions";
 
 describe("addNoteAction", () => {
   let orgId: number;
@@ -387,5 +387,116 @@ describe("addNoteAction", () => {
 
     expect(result).toEqual({ error: "Client not found." });
     expect(await prisma.clientNote.findFirst({ where: { clientId } })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteClientAction
+// ---------------------------------------------------------------------------
+
+describe("deleteClientAction", () => {
+  let orgId: number;
+  let adminId: number;
+  let clientId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: org.id, email: "admin@example.com", passwordHash: "x" },
+    });
+    adminId = admin.id;
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "Delete Me Corp" },
+    });
+    clientId = client.id;
+    mockAdmin(orgId, adminId);
+  });
+
+  it("deletes a client with no payments and returns ok", async () => {
+    const result = await deleteClientAction(clientId);
+    expect(result).toEqual({ ok: true });
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client).toBeNull();
+  });
+
+  it("cascade-removes contacts, notes, activity and projects", async () => {
+    await prisma.clientContact.create({ data: { clientId, name: "Test Contact" } });
+    await prisma.clientNote.create({ data: { clientId, authorAdminId: adminId, body: "Note" } });
+    await prisma.project.create({ data: { clientId, title: "P1", baseAmountInPaise: 100_000 } });
+
+    await deleteClientAction(clientId);
+
+    expect(await prisma.clientContact.count({ where: { clientId } })).toBe(0);
+    expect(await prisma.clientNote.count({ where: { clientId } })).toBe(0);
+    expect(await prisma.project.count({ where: { clientId } })).toBe(0);
+  });
+
+  it("writes an auditLog entry for the deletion", async () => {
+    await deleteClientAction(clientId);
+    const log = await prisma.auditLog.findFirst({
+      where: { organizationId: orgId, action: "client.deleted" },
+    });
+    expect(log).not.toBeNull();
+    expect(log?.entityType).toBe("Client");
+    expect(log?.entityId).toBe(String(clientId));
+  });
+
+  it("blocks deletion and returns hasPayments=true when payments exist", async () => {
+    // Create a service → billing plan → period → invoice → payment chain
+    const { createClientService } = await import("@/lib/services");
+    const { markBillingPeriodPaid } = await import("@/lib/payments");
+    const service = await createClientService({
+      clientId,
+      serviceName: "Local SEO",
+      feeInPaise: 500_000,
+      frequency: "MONTHLY",
+      billingDay: 1,
+      startDate: new Date(Date.UTC(2026, 7, 1)),
+      endDate: null,
+    });
+    const plan = await prisma.billingPlan.findUniqueOrThrow({ where: { clientServiceId: service.id } });
+    const period = await prisma.billingPeriod.findFirstOrThrow({ where: { billingPlanId: plan.id } });
+    await markBillingPeriodPaid({ billingPeriodId: period.id, amountInPaise: 500_000, paidAt: new Date(), recordedByAdminId: adminId });
+
+    const result = await deleteClientAction(clientId);
+    expect("error" in result).toBe(true);
+    expect((result as { error: string; hasPayments?: boolean }).hasPayments).toBe(true);
+    // Client must still exist
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client).not.toBeNull();
+  });
+
+  it("blocks deletion when a project milestone has been paid", async () => {
+    const { markMilestonePaid } = await import("@/lib/project-payments");
+    const project = await prisma.project.create({
+      data: { clientId, title: "Paid Project", baseAmountInPaise: 1_000_000 },
+    });
+    const milestone = await prisma.projectMilestone.create({
+      data: { projectId: project.id, label: "Advance", amountInPaise: 500_000, sortOrder: 0 },
+    });
+    await markMilestonePaid({ milestoneId: milestone.id, paidAt: new Date(), recordedByAdminId: adminId });
+
+    const result = await deleteClientAction(clientId);
+    expect("error" in result).toBe(true);
+    expect((result as { error: string; hasPayments?: boolean }).hasPayments).toBe(true);
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client).not.toBeNull();
+  });
+
+  it("rejects deletion when the admin belongs to a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const otherAdmin = await prisma.adminUser.create({
+      data: { organizationId: otherOrg.id, email: "other@example.com", passwordHash: "x" },
+    });
+    mockAdmin(otherOrg.id, otherAdmin.id);
+
+    const result = await deleteClientAction(clientId);
+    expect("error" in result).toBe(true);
+    // Client must still exist
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client).not.toBeNull();
   });
 });

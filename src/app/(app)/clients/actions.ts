@@ -102,6 +102,121 @@ export async function createClientAction(
   return { clientId: client.id };
 }
 
+// ---------------------------------------------------------------------------
+// deleteClientAction
+// ---------------------------------------------------------------------------
+
+/**
+ * Deletes a client and all their records, provided no financial records
+ * (payments) exist. If payments exist the operation is blocked — financial
+ * history must be preserved. In that case, set the client status to CHURNED
+ * to deactivate them instead.
+ *
+ * Cascade order (all in one transaction):
+ *   1. reminder/notification side-tables
+ *   2. billing-period + task rows (per service)
+ *   3. billing plans + service categories + services
+ *   4. projects (milestones + add-ons cascade via DB onDelete:Cascade)
+ *   5. renewals, reminder rules, invoices (empty if no payments)
+ *   6. activity, notes, contacts
+ *   7. client row
+ */
+export async function deleteClientAction(
+  clientId: number
+): Promise<{ error: string; hasPayments?: boolean } | { ok: true }> {
+  if (!Number.isInteger(clientId)) return { error: "Invalid client." };
+
+  const { admin, client } = await requireClientInOwnOrg(clientId);
+  if (!client) return { error: "Client not found." };
+
+  // Block if any payments have been recorded for this client.
+  const paymentCount = await prisma.invoiceLineItem.count({
+    where: {
+      OR: [
+        { billingPeriod: { billingPlan: { clientService: { clientId } } } },
+        { projectMilestone: { project: { clientId } } },
+        { projectAddOn: { project: { clientId } } },
+      ],
+    },
+  });
+
+  if (paymentCount > 0) {
+    return {
+      error: `This client has ${paymentCount} payment record${paymentCount === 1 ? "" : "s"} that must be preserved. Permanent deletion is blocked to protect financial history. Set this client's status to CHURNED to deactivate them instead, or delete all payments first if this is test data.`,
+      hasPayments: true,
+    };
+  }
+
+  // Safe to cascade-delete. All records are deleted in dependency order so
+  // no FK constraint fires mid-transaction.
+  await prisma.$transaction(async (tx) => {
+    const services = await tx.clientService.findMany({
+      where: { clientId },
+      select: { id: true },
+    });
+    const serviceIds = services.map((s) => s.id);
+
+    const billingPlans = await tx.billingPlan.findMany({
+      where: { clientServiceId: { in: serviceIds } },
+      select: { id: true },
+    });
+    const billingPlanIds = billingPlans.map((p) => p.id);
+
+    // Reminder side-tables (linked to billing periods or renewals)
+    const reminderJobs = await tx.reminderJob.findMany({
+      where: {
+        OR: [
+          { billingPeriod: { billingPlanId: { in: billingPlanIds } } },
+          { renewal: { clientId } },
+        ],
+      },
+      select: { id: true },
+    });
+    const reminderJobIds = reminderJobs.map((j) => j.id);
+    if (reminderJobIds.length > 0) {
+      await tx.notificationLog.deleteMany({ where: { reminderJobId: { in: reminderJobIds } } });
+      await tx.reminderJob.deleteMany({ where: { id: { in: reminderJobIds } } });
+    }
+
+    // Billing periods and task instances
+    await tx.billingPeriod.deleteMany({ where: { billingPlanId: { in: billingPlanIds } } });
+    await tx.taskInstance.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.billingPlan.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.clientServiceCategory.deleteMany({ where: { clientServiceId: { in: serviceIds } } });
+    await tx.clientService.deleteMany({ where: { clientId } });
+
+    // Projects (ProjectMilestone and ProjectAddOn cascade via DB)
+    await tx.project.deleteMany({ where: { clientId } });
+
+    // Renewals and reminder rules
+    await tx.renewal.deleteMany({ where: { clientId } });
+    await tx.reminderRule.deleteMany({ where: { clientId } });
+
+    // Invoices (empty because no payments, but delete for cleanliness)
+    await tx.invoice.deleteMany({ where: { clientId } });
+
+    // Client timeline and contacts
+    await tx.clientActivity.deleteMany({ where: { clientId } });
+    await tx.clientNote.deleteMany({ where: { clientId } });
+    await tx.clientContact.deleteMany({ where: { clientId } });
+    await tx.client.delete({ where: { id: clientId } });
+
+    // Log the deletion to the admin's audit trail (org-level, not client-level)
+    await tx.auditLog.create({
+      data: {
+        organizationId: admin.organizationId,
+        adminUserId: admin.id,
+        action: "client.deleted",
+        entityType: "Client",
+        entityId: String(clientId),
+        metadata: { businessName: client.businessName },
+      },
+    });
+  });
+
+  return { ok: true };
+}
+
 function optionalString(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;

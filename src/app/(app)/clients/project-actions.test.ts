@@ -14,6 +14,8 @@ import {
   addAddOnAction,
   markMilestonePaidAction,
   markAddOnPaidAction,
+  updateMilestoneAction,
+  deleteMilestoneAction,
 } from "@/app/(app)/clients/project-actions";
 
 // ---------------------------------------------------------------------------
@@ -414,5 +416,159 @@ describe("updateProjectAction", () => {
     });
     const result = await updateProjectAction(project.id, form({ status: "FLYING" }));
     expect("error" in result).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateMilestoneAction
+// ---------------------------------------------------------------------------
+
+describe("updateMilestoneAction", () => {
+  async function setupWithMilestone() {
+    const { admin, client } = await setup();
+    const project = await prisma.project.create({
+      data: { clientId: client.id, title: "Edit Project", baseAmountInPaise: 1_000_000 },
+    });
+    const milestone = await prisma.projectMilestone.create({
+      data: { projectId: project.id, label: "Original Label", amountInPaise: 500_000, sortOrder: 0 },
+    });
+    return { admin, client, project, milestone };
+  }
+
+  it("edits label, amount, and dueDate on an unpaid milestone", async () => {
+    const { milestone } = await setupWithMilestone();
+    const result = await updateMilestoneAction(
+      milestone.id,
+      form({ label: "New Label", amountInRupees: "7500", dueDate: "2026-12-01" })
+    );
+    expect(result).toEqual({ ok: true });
+    const m = await prisma.projectMilestone.findUniqueOrThrow({ where: { id: milestone.id } });
+    expect(m.label).toBe("New Label");
+    expect(m.amountInPaise).toBe(750_000);
+    expect(m.dueDate).not.toBeNull();
+  });
+
+  it("editing an unpaid milestone does NOT create a Payment or InvoiceLineItem", async () => {
+    const { milestone } = await setupWithMilestone();
+    const paymentsBefore = await prisma.payment.count();
+    await updateMilestoneAction(milestone.id, form({ label: "Updated", amountInRupees: "6000" }));
+    expect(await prisma.payment.count()).toBe(paymentsBefore);
+    const li = await prisma.invoiceLineItem.findUnique({ where: { projectMilestoneId: milestone.id } });
+    expect(li).toBeNull();
+  });
+
+  it("allows editing label and dueDate on a PAID milestone", async () => {
+    const { milestone } = await setupWithMilestone();
+    // mark paid
+    await markMilestonePaidAction(milestone.id, form({ paidAt: "2026-09-14" }));
+    const result = await updateMilestoneAction(
+      milestone.id,
+      form({ label: "Paid Label Changed", dueDate: "2026-10-01" })
+    );
+    expect(result).toEqual({ ok: true });
+    const m = await prisma.projectMilestone.findUniqueOrThrow({ where: { id: milestone.id } });
+    expect(m.label).toBe("Paid Label Changed");
+    // amount must stay unchanged
+    expect(m.amountInPaise).toBe(500_000);
+  });
+
+  it("blocks amount change on a PAID milestone", async () => {
+    const { milestone } = await setupWithMilestone();
+    await markMilestonePaidAction(milestone.id, form({ paidAt: "2026-09-14" }));
+    const result = await updateMilestoneAction(
+      milestone.id,
+      form({ label: "Same", amountInRupees: "9999" })
+    );
+    expect("error" in result).toBe(true);
+    // Payment record untouched
+    const li = await prisma.invoiceLineItem.findUniqueOrThrow({ where: { projectMilestoneId: milestone.id } });
+    expect(li.amountInPaise).toBe(500_000);
+  });
+
+  it("rejects wrong-org milestoneId", async () => {
+    await setupWithMilestone();
+    const org2 = await prisma.organization.create({ data: { name: "Org 2" } });
+    const c2 = await prisma.client.create({ data: { organizationId: org2.id, businessName: "C2" } });
+    const p2 = await prisma.project.create({ data: { clientId: c2.id, title: "P2", baseAmountInPaise: 100 } });
+    const m2 = await prisma.projectMilestone.create({
+      data: { projectId: p2.id, label: "X", amountInPaise: 100, sortOrder: 0 },
+    });
+    const result = await updateMilestoneAction(m2.id, form({ label: "Hacked" }));
+    expect("error" in result).toBe(true);
+    // label must be unchanged
+    const m = await prisma.projectMilestone.findUniqueOrThrow({ where: { id: m2.id } });
+    expect(m.label).toBe("X");
+  });
+
+  it("writes a project.updated activity entry", async () => {
+    const { milestone, client } = await setupWithMilestone();
+    await updateMilestoneAction(milestone.id, form({ label: "Activity Check" }));
+    const act = await prisma.clientActivity.findFirst({
+      where: { clientId: client.id, eventType: "project.updated" },
+    });
+    expect(act).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteMilestoneAction
+// ---------------------------------------------------------------------------
+
+describe("deleteMilestoneAction", () => {
+  async function setupWithMilestone() {
+    const { admin, client } = await setup();
+    const project = await prisma.project.create({
+      data: { clientId: client.id, title: "Delete Project", baseAmountInPaise: 1_000_000 },
+    });
+    const milestone = await prisma.projectMilestone.create({
+      data: { projectId: project.id, label: "Pending Milestone", amountInPaise: 500_000, sortOrder: 0 },
+    });
+    return { admin, client, project, milestone };
+  }
+
+  it("deletes a PENDING milestone", async () => {
+    const { milestone } = await setupWithMilestone();
+    const result = await deleteMilestoneAction(milestone.id);
+    expect(result).toEqual({ ok: true });
+    const m = await prisma.projectMilestone.findUnique({ where: { id: milestone.id } });
+    expect(m).toBeNull();
+  });
+
+  it("writes a project.updated activity after deletion", async () => {
+    const { milestone, client } = await setupWithMilestone();
+    await deleteMilestoneAction(milestone.id);
+    const act = await prisma.clientActivity.findFirst({
+      where: { clientId: client.id, eventType: "project.updated" },
+    });
+    expect(act).not.toBeNull();
+    expect(act?.summary).toContain("Pending Milestone");
+  });
+
+  it("blocks deletion of a PAID milestone", async () => {
+    const { milestone } = await setupWithMilestone();
+    await markMilestonePaidAction(milestone.id, form({ paidAt: "2026-09-14" }));
+    const result = await deleteMilestoneAction(milestone.id);
+    expect("error" in result).toBe(true);
+    // Milestone still exists
+    const m = await prisma.projectMilestone.findUnique({ where: { id: milestone.id } });
+    expect(m).not.toBeNull();
+    // Payment record untouched
+    const li = await prisma.invoiceLineItem.findUnique({ where: { projectMilestoneId: milestone.id } });
+    expect(li).not.toBeNull();
+  });
+
+  it("rejects wrong-org milestoneId", async () => {
+    await setupWithMilestone();
+    const org2 = await prisma.organization.create({ data: { name: "Org 2" } });
+    const c2 = await prisma.client.create({ data: { organizationId: org2.id, businessName: "C2" } });
+    const p2 = await prisma.project.create({ data: { clientId: c2.id, title: "P2", baseAmountInPaise: 100 } });
+    const m2 = await prisma.projectMilestone.create({
+      data: { projectId: p2.id, label: "X", amountInPaise: 100, sortOrder: 0 },
+    });
+    const result = await deleteMilestoneAction(m2.id);
+    expect("error" in result).toBe(true);
+    // Milestone still exists
+    const m = await prisma.projectMilestone.findUnique({ where: { id: m2.id } });
+    expect(m).not.toBeNull();
   });
 });
