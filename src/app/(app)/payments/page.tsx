@@ -106,13 +106,22 @@ export default async function PaymentsPage({
 
   const now = new Date();
   const curMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const lastMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const lastMonth = `${lastMonthDate.getUTCFullYear()}-${String(lastMonthDate.getUTCMonth() + 1).padStart(2, "0")}`;
 
   const thisMonthPayments = payments.filter((p) => paymentMonth(p) === curMonth);
   const thisMonthTotal = thisMonthPayments.reduce(
     (s, p) => s + p.amountInPaise,
     0
   );
-  const displayedTotal = displayed.reduce((s, p) => s + p.amountInPaise, 0);
+
+  const lastMonthPayments = payments.filter((p) => paymentMonth(p) === lastMonth);
+  const lastMonthTotal = lastMonthPayments.reduce(
+    (s, p) => s + p.amountInPaise,
+    0
+  );
+
+  const allTimeTotal = payments.reduce((s, p) => s + p.amountInPaise, 0);
 
   function fmtAmount(paise: number) {
     return `₹${(paise / 100).toLocaleString("en-IN")}`;
@@ -160,10 +169,10 @@ export default async function PaymentsPage({
         </form>
       </div>
 
-      {/* Summary bar */}
+      {/* Summary bar — fixed totals, independent of the month filter below */}
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-neutral-200 bg-white px-5 py-4">
-          <p className="text-xs text-neutral-500">This month</p>
+          <p className="text-xs text-neutral-500">This Month Collected Payment</p>
           <p className="mt-1 text-xl font-semibold text-neutral-900">
             {fmtAmount(thisMonthTotal)}
           </p>
@@ -174,14 +183,23 @@ export default async function PaymentsPage({
         </div>
 
         <div className="rounded-xl border border-neutral-200 bg-white px-5 py-4">
-          <p className="text-xs text-neutral-500">
-            {selectedMonth ? fmtMonthLabel(selectedMonth) : "All time"}
-          </p>
+          <p className="text-xs text-neutral-500">Last Month Collected Payment</p>
           <p className="mt-1 text-xl font-semibold text-neutral-900">
-            {fmtAmount(displayedTotal)}
+            {fmtAmount(lastMonthTotal)}
           </p>
           <p className="mt-0.5 text-xs text-neutral-400">
-            {displayed.length} payment{displayed.length !== 1 ? "s" : ""}
+            {lastMonthPayments.length} payment
+            {lastMonthPayments.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-neutral-200 bg-white px-5 py-4">
+          <p className="text-xs text-neutral-500">All Time</p>
+          <p className="mt-1 text-xl font-semibold text-neutral-900">
+            {fmtAmount(allTimeTotal)}
+          </p>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            {payments.length} payment{payments.length !== 1 ? "s" : ""}
           </p>
         </div>
       </div>
