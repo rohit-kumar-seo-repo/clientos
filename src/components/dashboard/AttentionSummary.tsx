@@ -32,18 +32,20 @@ export function AttentionSummary({
   const dueToday = services.filter((s) => s.tier === "due_today");
   const dueTodayProj = projectObligations.filter((p) => p.tier === "due_today");
 
-  const dueNext3 = services.filter((s) =>
-    ["due_tomorrow", "due_within_3_days"].includes(s.tier)
-  );
-  const dueNext3Proj = projectObligations.filter((p) =>
-    ["due_tomorrow", "due_within_3_days"].includes(p.tier)
-  );
-
   const workAttention = services.filter((s) => s.tier === "overdue_work");
 
   return (
     <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">
-      {/* Total Collected Payment — this month, recurring + projects */}
+      {/* 1. Expected This Month — recurring + projects due this month */}
+      <div className="rounded-xl border border-blue-100 bg-white p-4">
+        <p className="mb-2 text-xs font-medium text-neutral-500">Expected This Month</p>
+        <p className="text-2xl font-semibold text-blue-600">
+          {fmt(summary.thisMonth.expectedInPaise)}
+        </p>
+        <p className="mt-1 text-xs text-neutral-400">recurring + one-time projects</p>
+      </div>
+
+      {/* 2. Total Collected Payment — this month, recurring + projects */}
       <div className="rounded-xl border border-emerald-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Total Collected Payment</p>
         <p className="text-2xl font-semibold text-emerald-600">
@@ -54,7 +56,7 @@ export function AttentionSummary({
         </p>
       </div>
 
-      {/* Overdue Payments */}
+      {/* 3. Overdue Payments */}
       <div className="rounded-xl border border-red-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Overdue Payments</p>
         <p className="text-2xl font-semibold text-red-600">
@@ -69,7 +71,7 @@ export function AttentionSummary({
         </p>
       </div>
 
-      {/* Due Today */}
+      {/* 4. Due Today */}
       <div className="rounded-xl border border-amber-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Due Today</p>
         <p className="text-2xl font-semibold text-amber-600">
@@ -84,22 +86,7 @@ export function AttentionSummary({
         </p>
       </div>
 
-      {/* Due Next 3 Days */}
-      <div className="rounded-xl border border-neutral-200 bg-white p-4">
-        <p className="mb-2 text-xs font-medium text-neutral-500">Due Next 3 Days</p>
-        <p className="text-2xl font-semibold text-amber-500">
-          {dueNext3.length + dueNext3Proj.length > 0
-            ? fmt(serviceTotal(dueNext3) + projTotal(dueNext3Proj))
-            : "₹0"}
-        </p>
-        <p className="mt-1 text-xs text-neutral-400">
-          {uniqueClientCount(dueNext3.map(s => s.clientId), dueNext3Proj.map(p => p.clientId))}{" "}
-          clients &middot;{" "}
-          {dueNext3.length + dueNext3Proj.length} items
-        </p>
-      </div>
-
-      {/* Work Needs Attention — recurring only, no change */}
+      {/* 5. Work Needs Attention — recurring only, no change */}
       <div className="rounded-xl border border-neutral-200 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Work Attention</p>
         <p className="text-2xl font-semibold text-indigo-600">{workAttention.length}</p>

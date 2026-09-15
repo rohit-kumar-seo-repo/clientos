@@ -370,8 +370,30 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
+    expect(summary.thisMonth.expectedInPaise).toBe(500000 + 200000);
     expect(summary.thisMonth.collectedInPaise).toBe(500000 + 200000);
     expect(summary.thisMonth.paymentCount).toBe(2);
+  });
+
+  it("thisMonth.expectedInPaise counts a project obligation due this month regardless of status", async () => {
+    // No recurring service this month — isolates the project-only contribution.
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+    });
+    await prisma.projectMilestone.create({
+      data: {
+        projectId: project.id,
+        label: "Design",
+        amountInPaise: 300000,
+        dueDate: new Date(Date.UTC(2026, 8, 20)), // Sep 20 — this month, still PENDING
+        status: "PENDING",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.thisMonth.expectedInPaise).toBe(300000);
+    expect(summary.thisMonth.collectedInPaise).toBe(0); // not paid yet
   });
 });
 
