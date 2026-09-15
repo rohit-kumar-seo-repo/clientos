@@ -312,7 +312,7 @@ describe("getMonthlySummary", () => {
     expect(summary.projects.expectedInPaise).toBe(0);
   });
 
-  it("projects.collectedInPaise is lifetime, not scoped to this month", async () => {
+  it("totals.collectedInPaise includes a project payment even from a prior month (lifetime, not month-scoped)", async () => {
     const project = await prisma.project.create({
       data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
     });
@@ -329,11 +329,13 @@ describe("getMonthlySummary", () => {
     const summary = await getMonthlySummary(orgId, TODAY);
 
     expect(summary.projects.collectedInPaise).toBe(300000);
-    expect(summary.thisMonth.collectedInPaise).toBe(0); // paid in July, not this month
-    expect(summary.thisMonth.paymentCount).toBe(0);
+    // totals is always recurring + projects — a July payment still counts,
+    // because projects.collectedInPaise is itself a lifetime figure.
+    expect(summary.totals.collectedInPaise).toBe(summary.recurring.collectedInPaise + 300000);
+    expect(summary.totals.paymentCount).toBe(1);
   });
 
-  it("thisMonth totals combine recurring and project payments collected this month", async () => {
+  it("totals.expectedInPaise and collectedInPaise always equal recurring + projects exactly", async () => {
     const service = await createClientService({
       clientId,
       serviceName: "Local SEO",
@@ -370,30 +372,49 @@ describe("getMonthlySummary", () => {
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.thisMonth.expectedInPaise).toBe(500000 + 200000);
-    expect(summary.thisMonth.collectedInPaise).toBe(500000 + 200000);
-    expect(summary.thisMonth.paymentCount).toBe(2);
+    expect(summary.totals.expectedInPaise).toBe(
+      summary.recurring.expectedInPaise + summary.projects.expectedInPaise
+    );
+    expect(summary.totals.collectedInPaise).toBe(
+      summary.recurring.collectedInPaise + summary.projects.collectedInPaise
+    );
+    expect(summary.totals.paymentCount).toBe(2);
   });
 
-  it("thisMonth.expectedInPaise counts a project obligation due this month regardless of status", async () => {
-    // No recurring service this month — isolates the project-only contribution.
-    const project = await prisma.project.create({
-      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 1000000 },
+  // Regression for the 2026-09-15 bug report: recurring Expected ₹48,500 +
+  // project Expected ₹70,000 must show ₹1,18,500 as the total — the old
+  // "this month" definition instead summed recurring's ₹48,500 against only
+  // whatever fraction of the project happened to be due this month (₹10,000
+  // here), silently showing ₹58,500 instead of ₹1,18,500.
+  it("totals.expectedInPaise uses the project's full base amount, not just the slice due this month", async () => {
+    await createClientService({
+      clientId,
+      serviceName: "Local SEO",
+      feeInPaise: 4850000, // ₹48,500
+      frequency: "MONTHLY",
+      billingDay: 5,
+      startDate: new Date(Date.UTC(2026, 8, 1)),
+      endDate: null,
     });
+    const project = await prisma.project.create({
+      data: { clientId, title: "Website Redesign", status: "IN_PROGRESS", baseAmountInPaise: 7000000 }, // ₹70,000
+    });
+    // Only a small slice of the project's value is due this month.
     await prisma.projectMilestone.create({
       data: {
         projectId: project.id,
         label: "Design",
-        amountInPaise: 300000,
-        dueDate: new Date(Date.UTC(2026, 8, 20)), // Sep 20 — this month, still PENDING
+        amountInPaise: 1000000, // ₹10,000 — much less than the ₹70,000 base
+        dueDate: new Date(Date.UTC(2026, 8, 20)),
         status: "PENDING",
       },
     });
 
     const summary = await getMonthlySummary(orgId, TODAY);
 
-    expect(summary.thisMonth.expectedInPaise).toBe(300000);
-    expect(summary.thisMonth.collectedInPaise).toBe(0); // not paid yet
+    expect(summary.recurring.expectedInPaise).toBe(4850000);
+    expect(summary.projects.expectedInPaise).toBe(7000000);
+    expect(summary.totals.expectedInPaise).toBe(11850000); // ₹1,18,500
   });
 });
 

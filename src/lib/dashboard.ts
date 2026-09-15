@@ -69,12 +69,17 @@ export type MonthlySummary = {
     pendingInPaise: number;
     overdueInPaise: number;
   };
-  // Cross-cutting "this month" totals — feeds the Expected/Collected This
-  // Month KPI cards.
-  thisMonth: {
-    expectedInPaise: number;  // recurring + project obligations due this month
-    collectedInPaise: number; // recurring + project payments collected this month
-    paymentCount: number;     // number of payment events this month
+  // Grand totals — ALWAYS recurring + projects, nothing else. Never derive
+  // these from a separately date-filtered query: that's exactly what caused
+  // a real bug (2026-09-15) where "Expected This Month" used projects' this-
+  // month-due obligations while the visible "One-Time Projects" card used
+  // the full base amount, so the KPI total silently didn't match the sum of
+  // the two cards on screen. Defining totals as a pure sum of the fields
+  // above makes that class of bug structurally impossible going forward.
+  totals: {
+    expectedInPaise: number;  // = recurring.expectedInPaise + projects.expectedInPaise
+    collectedInPaise: number; // = recurring.collectedInPaise + projects.collectedInPaise
+    paymentCount: number;     // recurring payments this month + all-time project payments
   };
 };
 
@@ -84,8 +89,6 @@ export async function getMonthlySummary(
 ): Promise<MonthlySummary> {
   const label = currentPeriodLabel(today);
   const normalizedToday = startOfUTCDay(today);
-  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
 
   // I1: scope to ACTIVE services only — mirrors getAttentionData's filter so the
   // Monthly Summary's Overdue figure can never contradict the Attention section's
@@ -174,57 +177,48 @@ export async function getMonthlySummary(
   ]);
 
   const allObligations = [...allMilestones, ...allAddOns];
-  const isThisMonth = (d: Date | null) => d !== null && d >= monthStart && d < monthEnd;
 
   // Expected: total contracted value of every active (non-cancelled) project —
   // not just obligations due this month. This is the project's base amount.
+  // (Deliberately NOT date-filtered — see the `totals` field comment above
+  // for why a "this month" variant of this figure caused a real bug.)
   const projectExpectedInPaise = allProjects.reduce((s, p) => s + p.baseAmountInPaise, 0);
-
-  // This month's obligations (any status) — feeds the Expected This Month KPI.
-  const projectExpectedThisMonthInPaise = allObligations
-    .filter((o) => isThisMonth(o.dueDate))
-    .reduce((s, o) => s + o.amountInPaise, 0);
 
   const paidObligations = allObligations.filter((o) => o.status === "PAID");
 
   // Collected: all payments received across the project's lifetime.
   const projectCollectedInPaise = paidObligations.reduce((s, o) => s + o.amountInPaise, 0);
 
-  // This month's slice of collected — dueDate is set to paidAt when a payment
-  // is recorded (see recordProjectPaymentAction), so this correctly reflects
-  // when the money actually came in, not when the milestone was created.
-  const projectCollectedThisMonthInPaise = paidObligations
-    .filter((o) => isThisMonth(o.dueDate))
-    .reduce((s, o) => s + o.amountInPaise, 0);
-  const projectPaymentCountThisMonth = paidObligations.filter((o) =>
-    isThisMonth(o.dueDate)
-  ).length;
-
   // Overdue all time: feeds the Overdue card (same cross-month scope as recurring)
   const projectOverdueAllInPaise = allObligations
     .filter((o) => o.status === "PENDING" && o.dueDate !== null && o.dueDate < normalizedToday)
     .reduce((s, o) => s + o.amountInPaise, 0);
 
+  const recurring = {
+    expectedInPaise,
+    collectedInPaise,
+    pendingInPaise: expectedInPaise - collectedInPaise - overdueThisMonthInPaise,
+    overdueInPaise,
+  };
+  const projects = {
+    expectedInPaise: projectExpectedInPaise,
+    collectedInPaise: projectCollectedInPaise,
+    pendingInPaise: Math.max(
+      0,
+      projectExpectedInPaise - projectCollectedInPaise - projectOverdueAllInPaise
+    ),
+    overdueInPaise: projectOverdueAllInPaise,
+  };
+
   return {
-    recurring: {
-      expectedInPaise,
-      collectedInPaise,
-      pendingInPaise: expectedInPaise - collectedInPaise - overdueThisMonthInPaise,
-      overdueInPaise,
-    },
-    projects: {
-      expectedInPaise: projectExpectedInPaise,
-      collectedInPaise: projectCollectedInPaise,
-      pendingInPaise: Math.max(
-        0,
-        projectExpectedInPaise - projectCollectedInPaise - projectOverdueAllInPaise
-      ),
-      overdueInPaise: projectOverdueAllInPaise,
-    },
-    thisMonth: {
-      expectedInPaise: expectedInPaise + projectExpectedThisMonthInPaise,
-      collectedInPaise: collectedInPaise + projectCollectedThisMonthInPaise,
-      paymentCount: paidThisMonthPeriodIds.length + projectPaymentCountThisMonth,
+    recurring,
+    projects,
+    // Pure sum of the two objects above — see the type's comment for why
+    // this must never be computed any other way.
+    totals: {
+      expectedInPaise: recurring.expectedInPaise + projects.expectedInPaise,
+      collectedInPaise: recurring.collectedInPaise + projects.collectedInPaise,
+      paymentCount: paidThisMonthPeriodIds.length + paidObligations.length,
     },
   };
 }

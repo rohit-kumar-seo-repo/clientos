@@ -36,23 +36,27 @@ export function AttentionSummary({
 
   return (
     <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">
-      {/* 1. Expected This Month — recurring + projects due this month */}
+      {/* 1. Expected This Month — recurring (this month) + one-time projects
+             (full contract value). Always == recurring.expected + projects.expected,
+             so it can never disagree with the two cards in Monthly Summary. */}
       <div className="rounded-xl border border-blue-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Expected This Month</p>
         <p className="text-2xl font-semibold text-blue-600">
-          {fmt(summary.thisMonth.expectedInPaise)}
+          {fmt(summary.totals.expectedInPaise)}
         </p>
         <p className="mt-1 text-xs text-neutral-400">recurring + one-time projects</p>
       </div>
 
-      {/* 2. Total Collected Payment — this month, recurring + projects */}
+      {/* 2. Total Collected Payment — recurring collected this month + all
+             project payments ever collected. Always == recurring.collected +
+             projects.collected, same guarantee as the card above. */}
       <div className="rounded-xl border border-emerald-100 bg-white p-4">
         <p className="mb-2 text-xs font-medium text-neutral-500">Total Collected Payment</p>
         <p className="text-2xl font-semibold text-emerald-600">
-          {fmt(summary.thisMonth.collectedInPaise)}
+          {fmt(summary.totals.collectedInPaise)}
         </p>
         <p className="mt-1 text-xs text-neutral-400">
-          {summary.thisMonth.paymentCount} {summary.thisMonth.paymentCount === 1 ? "payment" : "payments"} this month
+          {summary.totals.paymentCount} {summary.totals.paymentCount === 1 ? "payment" : "payments"} · recurring + one-time projects
         </p>
       </div>
 
