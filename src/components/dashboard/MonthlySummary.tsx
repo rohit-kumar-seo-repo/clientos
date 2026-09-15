@@ -62,7 +62,7 @@ function Section({
       {expected > 0 && (
         <div>
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-xs text-neutral-500">Collected</span>
+            <span className="text-xs text-neutral-500">Progress</span>
             <span className="text-xs font-semibold text-neutral-700">{progressPct}%</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
