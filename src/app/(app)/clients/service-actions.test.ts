@@ -6,6 +6,12 @@ vi.mock("@/lib/require-admin", () => ({
   requireAdmin: vi.fn(),
 }));
 
+// `revalidatePath` reads Next's per-request store and throws when called
+// outside a request scope, which is exactly where these unit tests run.
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+}));
+
 import { requireAdmin } from "@/lib/require-admin";
 import {
   createServiceAction,

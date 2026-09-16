@@ -4,28 +4,6 @@ function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN")}`;
 }
 
-function SectionRow({
-  label,
-  color,
-  value,
-}: {
-  label: string;
-  color: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-center justify-between text-xs">
-      <span className={`flex items-center gap-1.5 text-neutral-600`}>
-        <span className={`h-2 w-2 rounded-full ${color}`} />
-        {label}
-      </span>
-      <span className={`font-medium ${color.includes("emerald") ? "text-emerald-700" : color.includes("amber") ? "text-amber-700" : "text-red-600"}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
 function Section({
   title,
   expected,

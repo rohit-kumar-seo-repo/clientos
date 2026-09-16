@@ -435,7 +435,7 @@ function ProjectRow({ project }: { project: ProjectWithObligations }) {
           </p>
           <div className="grid grid-cols-2 gap-2">
             <div className="col-span-2">
-              <label className="mb-1 block text-xs text-neutral-600">Label (e.g. "Advance")</label>
+              <label className="mb-1 block text-xs text-neutral-600">Label (e.g. &quot;Advance&quot;)</label>
               <input
                 name="label"
                 type="text"

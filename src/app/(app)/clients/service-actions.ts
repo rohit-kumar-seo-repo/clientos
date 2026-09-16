@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireClientInOwnOrg, requireClientServiceInOwnOrg } from "@/lib/authz";
 import { createClientService } from "@/lib/services";
@@ -92,6 +93,9 @@ export async function createServiceAction(
     },
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${clientId}`);
   return { clientServiceId: service.id };
 }
 
@@ -165,6 +169,9 @@ export async function updateServiceAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${clientService.clientId}`);
   return { ok: true };
 }
 
@@ -205,6 +212,8 @@ export async function updateServiceStatusAction(
     }),
   ]);
 
+  revalidatePath("/");
+  revalidatePath(`/clients/${clientService.clientId}`);
   return { ok: true };
 }
 
@@ -282,5 +291,8 @@ export async function updateWorkStatusAction(
     });
   }
 
+  revalidatePath("/");
+  revalidatePath("/work");
+  revalidatePath(`/clients/${clientService.clientId}`);
   return { ok: true };
 }

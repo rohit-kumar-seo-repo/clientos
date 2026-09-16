@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireClientInOwnOrg, requireProjectInOwnOrg, requireMilestoneInOwnOrg, requireAddOnInOwnOrg } from "@/lib/authz";
 import { markMilestonePaid, markAddOnPaid, MAX_PROJECT_AMOUNT_IN_PAISE } from "@/lib/project-payments";
@@ -103,6 +104,9 @@ export async function createProjectAction(
     return p;
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${clientId}`);
   return { projectId: project.id };
 }
 
@@ -159,6 +163,10 @@ export async function updateProjectAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/work");
+  revalidatePath(`/clients/${project.clientId}`);
   return { ok: true };
 }
 
@@ -217,6 +225,9 @@ export async function addMilestoneAction(
     return m;
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${project.clientId}`);
   return { milestoneId: milestone.id };
 }
 
@@ -268,6 +279,9 @@ export async function addAddOnAction(
     return a;
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${project.clientId}`);
   return { addOnId: addOn.id };
 }
 
@@ -342,6 +356,9 @@ export async function updateMilestoneAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${milestone.project.clientId}`);
   return { ok: true };
 }
 
@@ -388,6 +405,9 @@ export async function deleteMilestoneAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath(`/clients/${milestone.project.clientId}`);
   return { ok: true };
 }
 
@@ -437,6 +457,10 @@ export async function markMilestonePaidAction(
     },
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
+  revalidatePath(`/clients/${milestone.project.clientId}`);
   return { ok: true };
 }
 
@@ -486,6 +510,10 @@ export async function markAddOnPaidAction(
     },
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
+  revalidatePath(`/clients/${addOn.project.clientId}`);
   return { ok: true };
 }
 
@@ -571,5 +599,9 @@ export async function recordProjectPaymentAction(
     },
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
+  revalidatePath(`/clients/${project.clientId}`);
   return { ok: true };
 }

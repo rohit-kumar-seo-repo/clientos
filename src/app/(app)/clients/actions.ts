@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/require-admin";
 import { requireClientInOwnOrg } from "@/lib/authz";
+import type { ClientStatus } from "@/generated/prisma/client";
 
 /**
  * Maximum lengths for every bounded string column these actions write,
@@ -99,7 +100,51 @@ export async function createClientAction(
     return created;
   });
 
+  revalidatePath("/");
+  revalidatePath("/clients");
   return { clientId: client.id };
+}
+
+// ---------------------------------------------------------------------------
+// setClientStatusAction — Archive/Reactivate: the SAFE removal path
+// ---------------------------------------------------------------------------
+
+const VALID_CLIENT_STATUSES: ClientStatus[] = ["ACTIVE", "PAUSED", "CHURNED"];
+
+/**
+ * Sets a client's status without touching a single one of their records.
+ * This is the recommended way to "remove" a client once they have financial
+ * history — nothing is deleted, so Invoices/Payments/BillingPeriods/Projects
+ * are all preserved exactly as-is. An archived (CHURNED) client still shows
+ * up in Payments/reports; they're just no longer active work.
+ */
+export async function setClientStatusAction(
+  clientId: number,
+  status: ClientStatus
+): Promise<{ error: string } | { ok: true }> {
+  if (!Number.isInteger(clientId)) return { error: "Invalid client." };
+  if (!VALID_CLIENT_STATUSES.includes(status)) return { error: "Invalid status." };
+
+  const { client } = await requireClientInOwnOrg(clientId);
+  if (!client) return { error: "Client not found." };
+
+  if (client.status === status) return { ok: true }; // already there — no-op
+
+  await prisma.$transaction(async (tx) => {
+    await tx.client.update({ where: { id: clientId }, data: { status } });
+    await tx.clientActivity.create({
+      data: {
+        clientId,
+        eventType: "client.status_changed",
+        summary: `Status changed from ${client.status} to ${status}.`,
+      },
+    });
+  });
+
+  revalidatePath("/");
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${clientId}`);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +259,10 @@ export async function deleteClientAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/clients");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
   return { ok: true };
 }
 
@@ -312,6 +361,10 @@ export async function forceDeleteClientAction(
     });
   });
 
+  revalidatePath("/");
+  revalidatePath("/clients");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
   return { ok: true };
 }
 
@@ -380,6 +433,8 @@ export async function updateClientAction(
     });
   }
 
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${clientId}`);
   return { ok: true };
 }
 

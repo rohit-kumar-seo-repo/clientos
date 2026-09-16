@@ -9,6 +9,7 @@ import { ContactsPanel } from "@/components/clients/ContactsPanel";
 import { NotesPanel } from "@/components/clients/NotesPanel";
 import { PaymentHistoryPanel } from "@/components/clients/PaymentHistoryPanel";
 import { DeleteClientButton } from "@/components/clients/DeleteClientButton";
+import { ClientStatusButton } from "@/components/clients/ClientStatusButton";
 
 export default async function ClientDetailPage({
   params,
@@ -51,7 +52,9 @@ export default async function ClientDetailPage({
         </Link>
         <DeleteClientButton clientId={client.id} />
       </div>
-      <p className="mb-6 text-sm text-neutral-500">{client.status}</p>
+      <div className="mb-6">
+        <ClientStatusButton clientId={client.id} status={client.status} />
+      </div>
 
       <div className="grid grid-cols-2 gap-6">
         <section className="rounded-xl border border-neutral-200 bg-white p-6">

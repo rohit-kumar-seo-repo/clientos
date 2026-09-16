@@ -500,3 +500,100 @@ describe("deleteClientAction", () => {
     expect(client).not.toBeNull();
   });
 });
+
+import { setClientStatusAction } from "@/app/(app)/clients/actions";
+
+describe("setClientStatusAction", () => {
+  let orgId: number;
+  let adminId: number;
+  let clientId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.clearAllMocks();
+    const org = await prisma.organization.create({ data: { name: "Test Org" } });
+    orgId = org.id;
+    const admin = await prisma.adminUser.create({
+      data: { organizationId: org.id, email: "admin@example.com", passwordHash: "x" },
+    });
+    adminId = admin.id;
+    const client = await prisma.client.create({
+      data: { organizationId: org.id, businessName: "Archive Me Corp" },
+    });
+    clientId = client.id;
+    mockAdmin(orgId, adminId);
+  });
+
+  it("archives an active client (sets status to CHURNED) without deleting anything", async () => {
+    const result = await setClientStatusAction(clientId, "CHURNED");
+    expect(result).toEqual({ ok: true });
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    expect(client.status).toBe("CHURNED");
+  });
+
+  it("reactivates an archived client back to ACTIVE", async () => {
+    await setClientStatusAction(clientId, "CHURNED");
+    const result = await setClientStatusAction(clientId, "ACTIVE");
+    expect(result).toEqual({ ok: true });
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    expect(client.status).toBe("ACTIVE");
+  });
+
+  it("preserves every financial and project record when archiving", async () => {
+    const { createClientService } = await import("@/lib/services");
+    const project = await prisma.project.create({
+      data: { clientId, title: "Kept Project", baseAmountInPaise: 500_000 },
+    });
+    await createClientService({
+      clientId,
+      serviceName: "Local SEO",
+      feeInPaise: 500_000,
+      frequency: "MONTHLY",
+      billingDay: 1,
+      startDate: new Date(Date.UTC(2026, 7, 1)),
+      endDate: null,
+    });
+
+    await setClientStatusAction(clientId, "CHURNED");
+
+    expect(await prisma.project.count({ where: { id: project.id } })).toBe(1);
+    expect(await prisma.clientService.count({ where: { clientId } })).toBe(1);
+  });
+
+  it("logs a clientActivity entry recording the status change", async () => {
+    await setClientStatusAction(clientId, "CHURNED");
+    const activity = await prisma.clientActivity.findFirst({
+      where: { clientId, eventType: "client.status_changed" },
+    });
+    expect(activity).not.toBeNull();
+    expect(activity?.summary).toContain("CHURNED");
+  });
+
+  it("is a no-op when the client is already at the requested status", async () => {
+    const result = await setClientStatusAction(clientId, "ACTIVE");
+    expect(result).toEqual({ ok: true });
+    const count = await prisma.clientActivity.count({
+      where: { clientId, eventType: "client.status_changed" },
+    });
+    expect(count).toBe(0);
+  });
+
+  it("rejects an invalid status value", async () => {
+    // @ts-expect-error — intentionally passing an invalid enum value
+    const result = await setClientStatusAction(clientId, "DELETED");
+    expect(result).toEqual({ error: "Invalid status." });
+  });
+
+  it("rejects a status change for a client in a different organization", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other" } });
+    const otherAdmin = await prisma.adminUser.create({
+      data: { organizationId: otherOrg.id, email: "other@example.com", passwordHash: "x" },
+    });
+    mockAdmin(otherOrg.id, otherAdmin.id);
+
+    const result = await setClientStatusAction(clientId, "CHURNED");
+    expect(result).toEqual({ error: "Client not found." });
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    expect(client.status).toBe("ACTIVE");
+  });
+});

@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/require-admin";
 import { markBillingPeriodPaid } from "@/lib/payments";
@@ -100,5 +101,9 @@ export async function markPaidAction(
     },
   });
 
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
+  revalidatePath(`/clients/${period.billingPlan.clientService.clientId}`);
   return { ok: true };
 }

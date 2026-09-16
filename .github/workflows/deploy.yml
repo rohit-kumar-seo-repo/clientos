@@ -1,0 +1,87 @@
+name: Deploy ClientOS to production
+
+# Only a push to `production` deploys. Pushes to any other branch (main,
+# feature branches, PRs) only run tests — never touches billing.rohitkumarseo.com.
+on:
+  push:
+    branches: [production]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything here must pass before a single byte reaches production. A
+  # failure in this job stops the workflow — the deploy job below never runs.
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: "mysql://build:build@localhost:3306/build"
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          DATABASE_URL: "mysql://build:build@localhost:3306/build"
+
+  # ---------------------------------------------------------------------------
+  # Builds the image, pushes it to GHCR (private-repo-owned, so no separate
+  # registry credentials needed on the VPS), then asks the Hostinger API to
+  # pull it and recreate the container. No SSH involved.
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/clientos:latest
+            ghcr.io/${{ github.repository_owner }}/clientos:${{ github.sha }}
+
+      - name: Redeploy on the VPS via Hostinger API
+        run: |
+          status=$(curl -s -o /tmp/hostinger-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.HOSTINGER_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://developers.hostinger.com/api/vps/v1/virtual-machines/${{ secrets.HOSTINGER_VPS_ID }}/docker/clientos/update")
+          echo "Hostinger API responded with HTTP $status"
+          cat /tmp/hostinger-response.json
+          if [ "$status" -ge 300 ]; then
+            echo "Redeploy request failed — see response above."
+            exit 1
+          fi
