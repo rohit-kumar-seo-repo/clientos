@@ -13,6 +13,27 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
+    # This test suite is an integration suite — it truncates real tables via
+    # Prisma against a real database (see src/lib/test-db.ts), not mocks. A
+    # placeholder DATABASE_URL is only good enough for `prisma generate`
+    # (which just parses the string) and `next build` (no DB access at build
+    # time, per next.config.ts having no static generation touching data) —
+    # the actual test step needs a live, migrated database to connect to.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: clientos_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: "mysql://root@127.0.0.1:3306/clientos_test?ssl=false"
     steps:
       - uses: actions/checkout@v4
 
@@ -25,8 +46,6 @@ jobs:
 
       - name: Generate Prisma client
         run: npx prisma generate
-        env:
-          DATABASE_URL: "mysql://build:build@localhost:3306/build"
 
       - name: Type-check
         run: npx tsc --noEmit
@@ -34,13 +53,14 @@ jobs:
       - name: Lint
         run: npx eslint .
 
+      - name: Apply migrations to the ephemeral test database
+        run: npx prisma migrate deploy
+
       - name: Run test suite
         run: npm test
 
       - name: Production build
         run: npm run build
-        env:
-          DATABASE_URL: "mysql://build:build@localhost:3306/build"
 
   # ---------------------------------------------------------------------------
   # Builds the image, pushes it to GHCR (private-repo-owned, so no separate
