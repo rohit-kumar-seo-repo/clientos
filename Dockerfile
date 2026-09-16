@@ -35,17 +35,18 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 
+# Full node_modules first (the Prisma CLI needs its schema-engine binary
+# and transitive deps for `migrate deploy` at container start — cherry-
+# picking subfolders here already broke once). Next's own standalone
+# copy below layers its traced, minimal node_modules on top; directory
+# COPY merges rather than replaces, so both coexist fine.
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-# Migrations + Prisma CLI are needed at container start to run
-# `prisma migrate deploy` before the server starts serving traffic.
+# Migrations run at container start, before the server serves traffic.
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma7.config.ts ./prisma7.config.ts
-COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/dotenv ./node_modules/dotenv
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
