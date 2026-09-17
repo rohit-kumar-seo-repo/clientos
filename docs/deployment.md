@@ -1,6 +1,6 @@
 # ClientOS production deployment
 
-Production URL: **https://billing.rohitkumarseo.com**
+Production URL: **https://os.rohitkumarseo.com**
 Infrastructure: existing Hostinger VPS `srv1904708.hstgr.cloud` (id `1904708`),
 Docker Compose project name `clientos`, routed through the VPS's existing
 Traefik instance (automatic Let's Encrypt TLS).
@@ -46,7 +46,7 @@ local change → npm test / tsc / eslint / npm run build (all pass)
   → GitHub Actions: test job (repeats the same checks) → deploy job
   → image built + pushed to ghcr.io/<owner>/clientos
   → Hostinger API pulls the new image and recreates the container
-  → billing.rohitkumarseo.com serves the new version
+  → os.rohitkumarseo.com serves the new version
 ```
 
 A failing test/lint/build/typecheck stops the workflow before the deploy job

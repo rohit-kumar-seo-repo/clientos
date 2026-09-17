@@ -13,7 +13,7 @@ services:
     environment:
       - DATABASE_URL=mysql://clientos:${DB_PASSWORD}@db:3306/clientos_prod?ssl=false
       - ADMIN_SESSION_SECRET=${ADMIN_SESSION_SECRET}
-      - NEXT_PUBLIC_SITE_URL=https://billing.rohitkumarseo.com
+      - NEXT_PUBLIC_SITE_URL=https://os.rohitkumarseo.com
       - NODE_ENV=production
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}
@@ -22,7 +22,7 @@ services:
       - SMTP_FROM=${SMTP_FROM}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.clientos.rule=Host(`billing.rohitkumarseo.com`)
+      - traefik.http.routers.clientos.rule=Host(`os.rohitkumarseo.com`)
       - traefik.http.routers.clientos.entrypoints=websecure
       - traefik.http.routers.clientos.tls.certresolver=letsencrypt
       - traefik.http.services.clientos.loadbalancer.server.port=3000

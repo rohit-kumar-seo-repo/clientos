@@ -1,7 +1,7 @@
 name: Deploy ClientOS to production
 
 # Only a push to `production` deploys. Pushes to any other branch (main,
-# feature branches, PRs) only run tests — never touches billing.rohitkumarseo.com.
+# feature branches, PRs) only run tests — never touches os.rohitkumarseo.com.
 on:
   push:
     branches: [production]
