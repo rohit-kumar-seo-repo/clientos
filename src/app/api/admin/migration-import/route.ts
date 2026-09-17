@@ -246,18 +246,27 @@ export async function POST(request: Request) {
     const projectAddOnIdMap = new Map<number, number>();
     const invoiceIdMap = new Map<number, number>();
 
-    // 1. Service templates (org-level catalog)
+    // 1. Service templates (org-level catalog). Matched by name against
+    // whatever already exists in production first — same reuse rule the
+    // app's own findOrCreateServiceTemplate() applies — so a name that's
+    // already there (e.g. a template created through real earlier use of
+    // this production instance) is reused, never duplicated.
     for (const st of body.serviceTemplates) {
-      const created = await tx.serviceTemplate.create({
-        data: {
-          organizationId: orgId,
-          name: st.name,
-          description: st.description,
-          isActive: st.isActive,
-          createdAt: d(st.createdAt),
-        },
+      const existing = await tx.serviceTemplate.findFirst({
+        where: { organizationId: orgId, name: st.name },
       });
-      serviceTemplateIdMap.set(st.localId, created.id);
+      const resolved =
+        existing ??
+        (await tx.serviceTemplate.create({
+          data: {
+            organizationId: orgId,
+            name: st.name,
+            description: st.description,
+            isActive: st.isActive,
+            createdAt: d(st.createdAt),
+          },
+        }));
+      serviceTemplateIdMap.set(st.localId, resolved.id);
     }
 
     // 2. Clients
