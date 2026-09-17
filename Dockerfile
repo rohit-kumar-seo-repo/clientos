@@ -44,9 +44,15 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-# Migrations run at container start, before the server serves traffic.
+# Migrations + admin-bootstrap run at container start, via tsx directly
+# against the raw TypeScript source (NOT the compiled .next/standalone
+# output, which bundles everything into an opaque format tsx can't import
+# from) — so the actual source tree + tsconfig (for its @/* path alias)
+# have to be present too, not just prisma/.
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma7.config.ts ./prisma7.config.ts
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
