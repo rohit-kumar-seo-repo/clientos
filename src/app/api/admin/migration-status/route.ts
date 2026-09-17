@@ -51,12 +51,26 @@ export async function GET() {
     prisma.clientActivity.count(),
   ]);
 
+  // Full rows for tables expected to be near-empty — lets an unexpected
+  // non-zero count (e.g. a stray ServiceTemplate) actually be inspected
+  // instead of guessed at.
+  const [organizations, adminUsers, serviceTemplates] = await Promise.all([
+    prisma.organization.findMany(),
+    prisma.adminUser.findMany({
+      select: { id: true, organizationId: true, email: true, name: true, createdAt: true },
+    }),
+    prisma.serviceTemplate.findMany(),
+  ]);
+
   return NextResponse.json({
     currentAdmin: {
       id: admin.id,
       email: admin.email,
       organizationId: admin.organizationId,
     },
+    organizations,
+    adminUsers,
+    serviceTemplateRows: serviceTemplates,
     counts: {
       organizations: organizationCount,
       adminUsers: adminUserCount,
