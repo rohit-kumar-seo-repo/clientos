@@ -11,5 +11,10 @@ set -e
 echo "Applying pending Prisma migrations (safe, additive-only)..."
 npx prisma migrate deploy
 
+# Only ever creates an admin account if literally none exist yet — a no-op
+# on every later restart once one does. See prisma/bootstrap-admin.ts.
+echo "Checking for an admin account..."
+npx tsx prisma/bootstrap-admin.ts
+
 echo "Starting ClientOS..."
 exec "$@"
