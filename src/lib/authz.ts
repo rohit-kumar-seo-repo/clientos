@@ -84,3 +84,20 @@ export async function requireAddOnInOwnOrg(addOnId: number) {
   });
   return { admin, addOn };
 }
+
+/**
+ * Resolves a paymentLinkId to its owning client, scoped to the org — the
+ * payment-link counterpart to requireClientInOwnOrg. Never throws for a
+ * missing/wrong-org id; callers check `paymentLink === null`.
+ */
+export async function requirePaymentLinkInOwnOrg(paymentLinkId: number) {
+  const admin = await requireAdmin();
+  const paymentLink = await prisma.paymentLink.findFirst({
+    where: {
+      id: paymentLinkId,
+      client: { organizationId: admin.organizationId },
+    },
+    include: { client: true },
+  });
+  return { admin, paymentLink };
+}

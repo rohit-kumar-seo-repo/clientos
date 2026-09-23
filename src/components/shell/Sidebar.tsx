@@ -17,9 +17,10 @@ const MANAGEMENT_NAV = [
   { href: "/services", label: "Services" },
 ];
 
-// V1 settings nav — Razorpay, Notifications, Preferences are deferred
+// V1 settings nav — Notifications, Preferences are deferred
 const SETTINGS_NAV = [
   { href: "/settings/organization", label: "Organization" },
+  { href: "/settings/razorpay", label: "Razorpay" },
 ];
 
 function isActivePath(pathname: string, href: string): boolean {

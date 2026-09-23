@@ -34,6 +34,14 @@ jobs:
           --health-retries=10
     env:
       DATABASE_URL: "mysql://root@127.0.0.1:3306/clientos_test?ssl=false"
+      # Dummy, non-secret values — the test suite mocks the Razorpay SDK
+      # boundary (src/lib/razorpay.ts) rather than calling the real API, so
+      # no real Razorpay credentials are ever needed in CI. These only let
+      # isRazorpayConfigured()/getRazorpayMode() and the webhook signature
+      # tests (which sign against a known secret) run.
+      RAZORPAY_KEY_ID: "rzp_test_dummy0000000"
+      RAZORPAY_KEY_SECRET: "dummy_test_key_secret"
+      RAZORPAY_WEBHOOK_SECRET: "dummy_test_webhook_secret"
     steps:
       - uses: actions/checkout@v4
 

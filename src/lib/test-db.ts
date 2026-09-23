@@ -22,6 +22,7 @@ const TABLES = [
   "notification_logs",
   "organization_settings",
   "organizations",
+  "payment_links",
   "payments",
   "refunds",
   "reminder_jobs",

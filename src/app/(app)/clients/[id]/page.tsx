@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/require-admin";
-import { getClientById, getPaymentHistoryForClient, getProjectsForClient } from "@/lib/clients";
+import { getClientById, getPaymentHistoryForClient, getProjectsForClient, getPaymentLinksForClient } from "@/lib/clients";
 import { ActivityTimeline } from "@/components/clients/ActivityTimeline";
 import { ServicesPanel } from "@/components/clients/ServicesPanel";
 import { ProjectsPanel } from "@/components/clients/ProjectsPanel";
 import { ContactsPanel } from "@/components/clients/ContactsPanel";
 import { NotesPanel } from "@/components/clients/NotesPanel";
 import { PaymentHistoryPanel } from "@/components/clients/PaymentHistoryPanel";
+import { PaymentLinkHistory } from "@/components/clients/PaymentLinkHistory";
 import { DeleteClientButton } from "@/components/clients/DeleteClientButton";
 import { ClientStatusButton } from "@/components/clients/ClientStatusButton";
 
@@ -33,9 +34,10 @@ export default async function ClientDetailPage({
     notFound();
   }
 
-  const [payments, projects] = await Promise.all([
+  const [payments, projects, paymentLinks] = await Promise.all([
     getPaymentHistoryForClient(admin.organizationId, clientId),
     getProjectsForClient(admin.organizationId, clientId),
+    getPaymentLinksForClient(admin.organizationId, clientId),
   ]);
 
   return (
@@ -84,6 +86,10 @@ export default async function ClientDetailPage({
 
         <div className="col-span-2">
           <PaymentHistoryPanel payments={payments} />
+        </div>
+
+        <div className="col-span-2">
+          <PaymentLinkHistory clientId={client.id} paymentLinks={paymentLinks} />
         </div>
 
         <div className="col-span-2">

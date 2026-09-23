@@ -13,6 +13,7 @@ import { updateServiceAction, updateServiceStatusAction, updateWorkStatusAction 
 import { markPaidAction } from "@/app/(app)/clients/payment-actions";
 import { startOfUTCDay } from "@/lib/attention";
 import { AddServiceForm, SERVICE_CATEGORIES } from "./AddServiceForm";
+import { PaymentLinkButton } from "./PaymentLinkButton";
 
 type ServiceWithBilling = ClientService & {
   serviceTemplate: ServiceTemplate;
@@ -386,7 +387,7 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
         </form>
       )}
       {service.status !== "CANCELLED" && (
-        <div className="mt-2 flex gap-3 text-xs">
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
           {service.status === "ACTIVE" ? (
             <button
               type="button"
@@ -415,13 +416,16 @@ function ServiceRow({ service }: { service: ServiceWithBilling }) {
             Cancel
           </button>
           {period && !isPaid && (
-            <button
-              type="button"
-              onClick={() => setShowMarkPaid((v) => !v)}
-              className="rounded-md bg-neutral-900 px-2 py-1 text-white hover:bg-neutral-800"
-            >
-              Mark Paid
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowMarkPaid((v) => !v)}
+                className="rounded-md bg-neutral-900 px-2 py-1 text-white hover:bg-neutral-800"
+              >
+                Mark Paid Manually
+              </button>
+              <PaymentLinkButton kind="billingPeriod" id={period.id} amountInPaise={period.amountInPaise} />
+            </>
           )}
         </div>
       )}

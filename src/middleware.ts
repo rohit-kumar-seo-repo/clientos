@@ -6,6 +6,10 @@ import { SESSION_COOKIE_NAME } from "@/lib/session-cookie";
 // DB-backed session validation happens in `(app)/layout.tsx` via
 // `requireAdmin()`. This middleware only avoids a round-trip render for
 // the common case of a fully logged-out visitor.
+//
+// api/webhooks is the one deliberate exception: Razorpay's webhook POSTs
+// carry no session cookie (it authenticates via HMAC signature instead —
+// verified inside the route handler itself) and must never be redirected.
 export function middleware(request: NextRequest) {
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE_NAME);
 
@@ -17,5 +21,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!login|api/webhooks|_next/static|_next/image|favicon.ico).*)"],
 };

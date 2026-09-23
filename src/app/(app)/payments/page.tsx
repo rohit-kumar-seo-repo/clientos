@@ -87,6 +87,13 @@ export default async function PaymentsPage({
     return "Recurring";
   }
 
+  // Manual / Razorpay Payment Link — distinct from the obligation "Type"
+  // above. No direct-Order Razorpay flow exists in this phase, so any
+  // non-manual payment came through a Payment Link.
+  function paymentMethod(p: Payment): "Manual" | "Razorpay Payment Link" {
+    return p.paymentLinkId ? "Razorpay Payment Link" : "Manual";
+  }
+
   // ---------------------------------------------------------------------------
   // Month filtering (UTC — consistent with DB storage)
   // ---------------------------------------------------------------------------
@@ -240,6 +247,7 @@ export default async function PaymentsPage({
                   <th className="px-4 py-3 font-medium">Description</th>
                   <th className="px-4 py-3 font-medium">Detail</th>
                   <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Method</th>
                   <th className="px-4 py-3 font-medium">Amount</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium"></th>
@@ -279,11 +287,33 @@ export default async function PaymentsPage({
                           {type}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-block rounded-md px-2 py-0.5 text-xs font-medium ${
+                            paymentMethod(payment) === "Razorpay Payment Link"
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-neutral-100 text-neutral-600"
+                          }`}
+                        >
+                          {paymentMethod(payment)}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 font-medium text-neutral-900">
                         {fmtAmount(payment.amountInPaise)}
+                        {payment.currency !== "INR" && (
+                          <span className="ml-1 text-xs font-normal text-neutral-400">{payment.currency}</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="inline-block rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        <span
+                          className={`inline-block rounded-md px-2 py-0.5 text-xs font-medium ${
+                            payment.status === "CAPTURED"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : payment.status === "FAILED"
+                                ? "bg-red-50 text-red-700"
+                                : "bg-neutral-100 text-neutral-600"
+                          }`}
+                        >
                           {payment.status}
                         </span>
                       </td>

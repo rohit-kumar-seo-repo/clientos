@@ -14,6 +14,7 @@ import {
   deleteMilestoneAction,
   recordProjectPaymentAction,
 } from "@/app/(app)/clients/project-actions";
+import { PaymentLinkButton } from "./PaymentLinkButton";
 
 type ProjectWithObligations = Project & {
   milestones: ProjectMilestone[];
@@ -682,11 +683,16 @@ function MilestoneRow({ milestone }: { milestone: ProjectMilestone }) {
               onClick={() => mode === "markPaid" ? reset() : (setMode("markPaid"), setError(null))}
               className="rounded-md bg-neutral-900 px-2 py-0.5 text-white hover:bg-neutral-800"
             >
-              Mark Paid
+              Mark Paid Manually
             </button>
           )}
         </div>
       </div>
+      {!isPaid && (
+        <div className="mt-1.5">
+          <PaymentLinkButton kind="projectMilestone" id={milestone.id} amountInPaise={milestone.amountInPaise} />
+        </div>
+      )}
 
       {/* Edit form */}
       {mode === "edit" && (
@@ -848,11 +854,16 @@ function AddOnRow({ addOn }: { addOn: ProjectAddOn }) {
               onClick={() => setShowMarkPaid((v) => !v)}
               className="rounded-md bg-neutral-900 px-2 py-0.5 text-white hover:bg-neutral-800"
             >
-              Mark Paid
+              Mark Paid Manually
             </button>
           )}
         </div>
       </div>
+      {!isPaid && (
+        <div className="mt-1.5">
+          <PaymentLinkButton kind="projectAddOn" id={addOn.id} amountInPaise={addOn.amountInPaise} />
+        </div>
+      )}
       {showMarkPaid && (
         <form
           action={handleMarkPaid}

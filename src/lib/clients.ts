@@ -54,6 +54,13 @@ export async function getPaymentHistoryForClient(organizationId: number, clientI
   });
 }
 
+export async function getPaymentLinksForClient(organizationId: number, clientId: number) {
+  return prisma.paymentLink.findMany({
+    where: { clientId, client: { organizationId } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 /**
  * Returns all projects for a client, scoped to the org.
  * Milestones are ordered by sortOrder; add-ons by createdAt.

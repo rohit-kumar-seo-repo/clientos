@@ -66,6 +66,17 @@ enum RefundStatus {
   FAILED
 }
 
+// Matches Razorpay's own Payment Link states exactly. A link has no
+// "FAILED" state of its own — individual attempts against it can fail
+// (recorded as a FAILED Payment) without changing the link's own status.
+enum PaymentLinkStatus {
+  CREATED
+  PARTIALLY_PAID
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
 // The collection instrument layered on top of BillingPeriod (the
 // obligation). A BillingPeriod's own status stays date-driven; Invoice
 // status is payment-driven and cascades down to its line items' periods
@@ -215,13 +226,14 @@ model AdminUser {
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
-  sessions          AdminSession[]
-  auditLogs         AuditLog[]
-  clientNotes       ClientNote[]
-  clientActivity    ClientActivity[]
-  refundsInitiated  Refund[]
-  paymentsRecorded  Payment[]
-  reminderApprovals ReminderJob[]
+  sessions            AdminSession[]
+  auditLogs           AuditLog[]
+  clientNotes         ClientNote[]
+  clientActivity      ClientActivity[]
+  refundsInitiated    Refund[]
+  paymentsRecorded    Payment[]
+  reminderApprovals   ReminderJob[]
+  paymentLinksCreated PaymentLink[]
 
   @@index([organizationId])
   @@map("admin_users")
@@ -289,6 +301,7 @@ model Client {
   renewals      Renewal[]
   reminderRules ReminderRule[]
   projects      Project[]
+  paymentLinks  PaymentLink[]
 
   @@index([organizationId])
   @@index([status])
@@ -500,6 +513,7 @@ model BillingPeriod {
   // payments are recorded against the Invoice, never the period directly.
   invoiceLineItem InvoiceLineItem?
   reminderJobs    ReminderJob[]
+  paymentLinks    PaymentLink[]
 
   @@unique([billingPlanId, periodLabel])
   @@index([status])
@@ -575,24 +589,79 @@ model Payment {
   id                Int           @id @default(autoincrement())
   invoiceId         Int
   recordedByAdminId Int?
+  paymentLinkId     Int? // set when this payment came from a PaymentLink; null for manual/checkout-order payments
   razorpayOrderId   String?       @db.VarChar(60)
   razorpayPaymentId String?       @unique @db.VarChar(60)
   razorpaySignature String?       @db.VarChar(255)
   status            PaymentStatus @default(CREATED)
   amountInPaise     Int
+  currency          String        @default("INR") @db.VarChar(3) // mirrors Invoice/BillingPlan's existing currency field
   method            String?       @db.VarChar(30)
   failureReason     String?       @db.VarChar(255)
   capturedAt        DateTime?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  invoice         Invoice    @relation(fields: [invoiceId], references: [id])
-  recordedByAdmin AdminUser? @relation(fields: [recordedByAdminId], references: [id])
+  invoice         Invoice      @relation(fields: [invoiceId], references: [id])
+  recordedByAdmin AdminUser?   @relation(fields: [recordedByAdminId], references: [id])
+  paymentLink     PaymentLink? @relation(fields: [paymentLinkId], references: [id])
 
   refunds Refund[]
 
   @@index([invoiceId])
+  @@index([paymentLinkId])
   @@map("payments")
+}
+
+// A Razorpay Payment Link — the collection *request*, distinct from the
+// Payment row(s) it may produce over its lifetime (zero, one, or several,
+// for a partially-paid link). Deliberately does NOT create an Invoice at
+// creation time: exactly like the manual "Mark Paid" path, an Invoice only
+// ever comes into existence once money actually moves — a link, by itself,
+// is never a financial obligation.
+//
+// Exactly one of (billingPeriodId, projectMilestoneId, projectAddOnId) is
+// set for an obligation-backed link; all three null means a custom/ad-hoc
+// link with no existing obligation — enforced centrally in server-side
+// creation logic (payment-links.ts), same principle as InvoiceLineItem's
+// own invariant. These FKs are deliberately NOT @unique (unlike
+// InvoiceLineItem's): a link can expire or be cancelled and a fresh one
+// issued for the same obligation, so "at most one *active* link per
+// obligation" is an application-level check in payment-links.ts, not a DB
+// constraint — old links are never deleted, only status-transitioned, so
+// history stays intact.
+model PaymentLink {
+  id                      Int               @id @default(autoincrement())
+  clientId                Int
+  billingPeriodId         Int?
+  projectMilestoneId      Int?
+  projectAddOnId          Int?
+  razorpayPaymentLinkId   String            @unique @db.VarChar(60)
+  razorpayShortUrl        String            @db.VarChar(255)
+  description             String            @db.VarChar(255)
+  amountInPaise           Int
+  currency                String            @default("INR") @db.VarChar(3)
+  allowsPartialPayment    Boolean           @default(false)
+  minPartialAmountInPaise Int?
+  expiresAt               DateTime?
+  status                  PaymentLinkStatus @default(CREATED)
+  createdByAdminId        Int?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  client           Client            @relation(fields: [clientId], references: [id])
+  billingPeriod    BillingPeriod?    @relation(fields: [billingPeriodId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  projectMilestone ProjectMilestone? @relation(fields: [projectMilestoneId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  projectAddOn     ProjectAddOn?     @relation(fields: [projectAddOnId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdByAdmin   AdminUser?        @relation(fields: [createdByAdminId], references: [id])
+
+  payments Payment[]
+
+  @@index([clientId])
+  @@index([billingPeriodId])
+  @@index([projectMilestoneId])
+  @@index([projectAddOnId])
+  @@map("payment_links")
 }
 
 model Refund {
@@ -682,6 +751,7 @@ model ProjectMilestone {
 
   project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   invoiceLineItem InvoiceLineItem? // null until marked paid
+  paymentLinks    PaymentLink[]
 
   @@index([projectId])
   @@map("project_milestones")
@@ -703,6 +773,7 @@ model ProjectAddOn {
 
   project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   invoiceLineItem InvoiceLineItem? // null until marked paid
+  paymentLinks    PaymentLink[]
 
   @@index([projectId])
   @@map("project_add_ons")

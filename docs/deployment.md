@@ -25,10 +25,16 @@ Traefik instance (automatic Let's Encrypt TLS).
    SMTP_USER=
    SMTP_PASSWORD=
    SMTP_FROM=ClientOS <notifications@rohitkumarseo.com>
+   RAZORPAY_KEY_ID=<TEST mode only for now — rzp_test_...>
+   RAZORPAY_KEY_SECRET=<TEST mode only for now>
+   RAZORPAY_WEBHOOK_SECRET=<from the webhook's config in the Razorpay Dashboard>
    ```
-   Razorpay variables are intentionally omitted — Razorpay is not being
-   integrated in this deployment. WhatsApp variables are likewise omitted;
-   the reminder engine's WhatsApp channel already fails closed when unset.
+   As of the Payment Links feature, Razorpay variables are required —
+   **TEST-mode key values only** until Razorpay is explicitly approved to go
+   live. These three have not yet been provisioned on the VPS project as of
+   this writing; that's a deployment-time step, not done by this change.
+   WhatsApp variables are still omitted; the reminder engine's WhatsApp
+   channel already fails closed when unset.
 
 3. **First deploy only**: create the Compose project once, pointing at this
    repo (subsequent deploys go through `.github/workflows/deploy.yml`, which
