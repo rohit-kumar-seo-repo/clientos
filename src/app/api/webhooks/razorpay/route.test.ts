@@ -172,6 +172,43 @@ describe("POST /api/webhooks/razorpay", () => {
     expect(payments).toHaveLength(1);
   });
 
+  it("actually processes a retry after the first attempt threw (not swallowed as a false duplicate)", async () => {
+    const { period, link } = await setupLinkForOpenPeriod();
+    vi.mocked(fetchPaymentLink).mockRejectedValueOnce(new Error("transient network error"));
+    const body = paidEventBody(link.razorpayPaymentLinkId, "pay_retry_after_failure");
+
+    await expect(POST(buildRequest(body))).rejects.toThrow("transient network error");
+
+    // First attempt left a WebhookEvent row with processedAt still null.
+    const afterFirstAttempt = await prisma.webhookEvent.findMany();
+    expect(afterFirstAttempt).toHaveLength(1);
+    expect(afterFirstAttempt[0].processedAt).toBeNull();
+    const paymentsAfterFirst = await prisma.payment.findMany();
+    expect(paymentsAfterFirst).toHaveLength(0);
+
+    // Razorpay retries the identical delivery; this time the re-fetch succeeds.
+    vi.mocked(fetchPaymentLink).mockResolvedValue({ amount_paid: period.amountInPaise } as never);
+    vi.mocked(fetchPayment).mockResolvedValue({
+      status: "captured",
+      amount: period.amountInPaise,
+      currency: "INR",
+      order_id: null,
+    } as never);
+
+    const retryResponse = await POST(buildRequest(body));
+    const retryJson = await retryResponse.json();
+
+    expect(retryResponse.status).toBe(200);
+    expect(retryJson.duplicate).toBeUndefined();
+    const events = await prisma.webhookEvent.findMany();
+    expect(events).toHaveLength(1);
+    expect(events[0].processedAt).not.toBeNull();
+    const updatedPeriod = await prisma.billingPeriod.findUniqueOrThrow({ where: { id: period.id } });
+    expect(updatedPeriod.status).toBe("PAID");
+    const payments = await prisma.payment.findMany();
+    expect(payments).toHaveLength(1);
+  });
+
   it("handles two concurrent deliveries of the same event without double-processing", async () => {
     const { period, link } = await setupLinkForOpenPeriod();
     vi.mocked(fetchPaymentLink).mockResolvedValue({ amount_paid: period.amountInPaise } as never);

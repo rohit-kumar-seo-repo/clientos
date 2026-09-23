@@ -88,6 +88,15 @@ export async function POST(request: NextRequest) {
   // Idempotency: insert-or-detect-duplicate up front, before any processing,
   // so a concurrent duplicate delivery loses the race cleanly (P2002) rather
   // than both proceeding to process the same event.
+  //
+  // On a P2002, the existing row's processedAt decides what "duplicate"
+  // means: if it's set, this event was already fully handled — genuine
+  // duplicate, no-op. If it's null, a prior attempt inserted the row and
+  // then crashed/threw before finishing (a transient DB or Razorpay-API
+  // error) — without this check, every one of Razorpay's automatic retries
+  // would be swallowed as a false duplicate and the payment would never get
+  // recorded. Reprocessing here is safe: recordLinkPayment/etc. all re-check
+  // current state (already_fully_paid, status guards) before writing.
   let webhookEvent;
   try {
     webhookEvent = await prisma.webhookEvent.create({
@@ -100,11 +109,14 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      // Already seen this exact event — Razorpay retry or a race with
-      // another delivery. Acknowledge without reprocessing.
-      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+      const existing = await prisma.webhookEvent.findUniqueOrThrow({ where: { razorpayEventId: eventKey } });
+      if (existing.processedAt) {
+        return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+      }
+      webhookEvent = existing;
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   if (!ourLink) {
@@ -133,6 +145,17 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err) {
+    // P2034: a genuinely concurrent delivery of this same event is
+    // mid-transaction on the same rows right now (the reprocess-a-stale-row
+    // path above can race against it). That other request either already
+    // committed or is about to — this one backs off rather than retrying
+    // into the same conflict, exactly as if it had lost the idempotency
+    // race outright. Any other error is a real failure: recorded and
+    // re-thrown so the response is non-2xx and Razorpay retries later,
+    // at which point processedAt correctly decides reprocess vs. duplicate.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
+      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+    }
     await prisma.webhookEvent.update({
       where: { id: webhookEvent.id },
       data: { processingError: err instanceof Error ? err.message : "Unknown processing error" },
