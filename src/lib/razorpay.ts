@@ -97,6 +97,7 @@ export type CreatePaymentLinkParams = {
   firstMinPartialAmountInPaise?: number | null;
   expireBy?: Date | null;
   referenceId?: string;
+  upiOnly?: boolean;
 };
 
 export async function createPaymentLink(
@@ -118,6 +119,7 @@ export async function createPaymentLink(
       : {}),
     ...(params.expireBy ? { expire_by: Math.floor(params.expireBy.getTime() / 1000) } : {}),
     ...(params.referenceId ? { reference_id: params.referenceId } : {}),
+    ...(params.upiOnly ? { upi_link: true } : {}),
     notify: { email: Boolean(params.customerEmail), sms: Boolean(params.customerContact) },
   });
 }

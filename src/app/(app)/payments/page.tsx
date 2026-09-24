@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/require-admin";
 import { prisma } from "@/lib/db";
+import { listPaymentLinksForOrg } from "@/lib/payment-links";
+import { CreatePaymentLinkModal } from "@/components/payments/CreatePaymentLinkModal";
+import { PaymentLinkHistoryTable } from "@/components/payments/PaymentLinkHistoryTable";
 
 export default async function PaymentsPage({
   searchParams,
@@ -44,6 +47,8 @@ export default async function PaymentsPage({
     },
     orderBy: { createdAt: "desc" },
   });
+
+  const paymentLinks = await listPaymentLinksForOrg(admin.organizationId);
 
   // ---------------------------------------------------------------------------
   // Helpers — derive display values from first line item (always exactly one)
@@ -148,32 +153,35 @@ export default async function PaymentsPage({
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between gap-4">
         <h1 className="text-lg font-semibold text-neutral-900">Payments</h1>
 
-        {/* Month filter */}
-        <form method="GET" className="flex items-center gap-2">
-          <input
-            type="month"
-            name="month"
-            defaultValue={selectedMonth ?? ""}
-            className="rounded-lg border border-neutral-300 px-2 py-1 text-sm text-neutral-700"
-          />
-          <button
-            type="submit"
-            className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
-          >
-            Filter
-          </button>
-          {selectedMonth && (
-            <Link
-              href="/payments"
-              className="text-sm text-neutral-500 hover:text-neutral-900 hover:underline"
+        <div className="flex items-center gap-3">
+          {/* Month filter */}
+          <form method="GET" className="flex items-center gap-2">
+            <input
+              type="month"
+              name="month"
+              defaultValue={selectedMonth ?? ""}
+              className="rounded-lg border border-neutral-300 px-2 py-1 text-sm text-neutral-700"
+            />
+            <button
+              type="submit"
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
             >
-              Clear
-            </Link>
-          )}
-        </form>
+              Filter
+            </button>
+            {selectedMonth && (
+              <Link
+                href="/payments"
+                className="text-sm text-neutral-500 hover:text-neutral-900 hover:underline"
+              >
+                Clear
+              </Link>
+            )}
+          </form>
+          <CreatePaymentLinkModal />
+        </div>
       </div>
 
       {/* Summary bar — fixed totals, independent of the month filter below */}
@@ -333,6 +341,11 @@ export default async function PaymentsPage({
           </div>
         </div>
       )}
+
+      <div className="mt-8">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900">Payment Links</h2>
+        <PaymentLinkHistoryTable links={paymentLinks} />
+      </div>
     </div>
   );
 }

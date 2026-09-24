@@ -44,6 +44,12 @@ type CommonCreateFields = {
   allowsPartialPayment: boolean;
   minPartialAmountInPaise?: number | null;
   expiresAt?: Date | null;
+  isUpiOnly?: boolean;
+  // Overrides for the Razorpay-facing customer identity on this one link —
+  // never written back to the Client record itself.
+  customerNameOverride?: string | null;
+  customerEmailOverride?: string | null;
+  customerContactOverride?: string | null;
 };
 
 export type CreatePaymentLinkInput =
@@ -186,12 +192,13 @@ async function createAndPersistLink(args: PersistArgs): Promise<CreatePaymentLin
       amountInPaise: args.amountInPaise,
       currency: args.currency,
       description: args.description,
-      customerName: args.client.contactPerson ?? args.client.businessName,
-      customerEmail: args.client.email,
-      customerContact: args.client.phone,
+      customerName: args.customerNameOverride ?? args.client.contactPerson ?? args.client.businessName,
+      customerEmail: args.customerEmailOverride ?? args.client.email,
+      customerContact: args.customerContactOverride ?? args.client.phone,
       acceptPartial: args.allowsPartialPayment,
       firstMinPartialAmountInPaise: args.minPartialAmountInPaise ?? null,
       expireBy: args.expiresAt ?? null,
+      upiOnly: args.isUpiOnly,
     });
   } catch (err) {
     return { error: "razorpay_error", message: err instanceof Error ? err.message : "Unknown Razorpay error" };
@@ -214,6 +221,7 @@ async function createAndPersistLink(args: PersistArgs): Promise<CreatePaymentLin
       currency: args.currency,
       allowsPartialPayment: args.allowsPartialPayment,
       minPartialAmountInPaise: args.minPartialAmountInPaise ?? null,
+      isUpiOnly: args.isUpiOnly ?? false,
       expiresAt: args.expiresAt ?? null,
       status: "CREATED",
       createdByAdminId: args.createdByAdminId,
@@ -550,4 +558,72 @@ export async function markLinkCancelledFromWebhook(razorpayPaymentLinkId: string
     data: { status: "CANCELLED" },
   });
   return { ok: true, clientId: link.clientId };
+}
+
+// ---------------------------------------------------------------------------
+// Read models for the "Create Payment Link" form and the Payments-page
+// Payment Link history section
+// ---------------------------------------------------------------------------
+
+export type EligibleObligations = {
+  billingPeriods: { id: number; label: string; amountInPaise: number; currency: string }[];
+  milestones: { id: number; label: string; amountInPaise: number }[];
+  addOns: { id: number; label: string; amountInPaise: number }[];
+};
+
+/**
+ * Obligations for one client that a Payment Link can meaningfully be created
+ * for: not already PAID, and not already carrying an active (CREATED /
+ * PARTIALLY_PAID) link — createPaymentLinkForObligation re-checks both
+ * server-side regardless; this is purely so the form doesn't offer a choice
+ * that would just bounce back as an error.
+ */
+export async function getEligibleObligationsForClient(clientId: number): Promise<EligibleObligations> {
+  const activeLinkFilter = { paymentLinks: { none: { status: { in: [...ACTIVE_LINK_STATUSES] } } } };
+
+  const [periods, milestones, addOns] = await Promise.all([
+    prisma.billingPeriod.findMany({
+      where: { status: { not: "PAID" }, billingPlan: { clientService: { clientId } }, ...activeLinkFilter },
+      include: { billingPlan: { include: { clientService: { include: { serviceTemplate: true } } } } },
+      orderBy: { dueDate: "asc" },
+    }),
+    prisma.projectMilestone.findMany({
+      where: { status: "PENDING", project: { clientId }, ...activeLinkFilter },
+      include: { project: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+    prisma.projectAddOn.findMany({
+      where: { status: "PENDING", project: { clientId }, ...activeLinkFilter },
+      include: { project: true },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
+
+  return {
+    billingPeriods: periods.map((p) => ({
+      id: p.id,
+      label: `${p.billingPlan.clientService.serviceTemplate.name} — ${p.periodLabel}`,
+      amountInPaise: p.amountInPaise,
+      currency: p.billingPlan.currency,
+    })),
+    milestones: milestones.map((m) => ({
+      id: m.id,
+      label: `${m.project.title} — ${m.label}`,
+      amountInPaise: m.amountInPaise,
+    })),
+    addOns: addOns.map((a) => ({
+      id: a.id,
+      label: `${a.project.title} — ${a.description}`,
+      amountInPaise: a.amountInPaise,
+    })),
+  };
+}
+
+/** All Payment Links across the org, newest first — for the Payments page. */
+export async function listPaymentLinksForOrg(organizationId: number) {
+  return prisma.paymentLink.findMany({
+    where: { client: { organizationId } },
+    include: { client: true },
+    orderBy: { createdAt: "desc" },
+  });
 }

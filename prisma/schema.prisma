@@ -643,6 +643,7 @@ model PaymentLink {
   currency                String            @default("INR") @db.VarChar(3)
   allowsPartialPayment    Boolean           @default(false)
   minPartialAmountInPaise Int?
+  isUpiOnly               Boolean           @default(false) // Razorpay's upi_link flag — a UPI-only link vs. the standard all-methods link
   expiresAt               DateTime?
   status                  PaymentLinkStatus @default(CREATED)
   createdByAdminId        Int?

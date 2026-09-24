@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/require-admin";
 import {
   requireClientInOwnOrg,
   requirePaymentLinkInOwnOrg,
@@ -12,12 +13,62 @@ import { requireBillingPeriodInOwnOrg } from "@/app/(app)/clients/payment-action
 import {
   createPaymentLinkForObligation,
   cancelPaymentLinkById,
+  getEligibleObligationsForClient,
   MAX_PAYMENT_LINK_AMOUNT_IN_PAISE,
+  type EligibleObligations,
 } from "@/lib/payment-links";
+import { listClients } from "@/lib/clients";
 
 type ActionResult = { error: string } | { ok: true };
 
-type CommonFields = { allowsPartialPayment: boolean; minPartialAmountInPaise: number | null; expiresAt: Date | null };
+// Public subset of the created PaymentLink row, returned to the browser so
+// the "Create Payment Link" modal can render its result screen (Copy/Open
+// link, status, expiry). Never includes anything Razorpay-secret — the
+// short URL and link id are already meant to be shared with the payer.
+export type PaymentLinkSummary = {
+  id: number;
+  razorpayPaymentLinkId: string;
+  razorpayShortUrl: string;
+  amountInPaise: number;
+  currency: string;
+  status: string;
+  isUpiOnly: boolean;
+  expiresAt: Date | null;
+};
+
+type CreateActionResult = { error: string } | { ok: true; paymentLink: PaymentLinkSummary };
+
+function toSummary(link: {
+  id: number;
+  razorpayPaymentLinkId: string;
+  razorpayShortUrl: string;
+  amountInPaise: number;
+  currency: string;
+  status: string;
+  isUpiOnly: boolean;
+  expiresAt: Date | null;
+}): PaymentLinkSummary {
+  return {
+    id: link.id,
+    razorpayPaymentLinkId: link.razorpayPaymentLinkId,
+    razorpayShortUrl: link.razorpayShortUrl,
+    amountInPaise: link.amountInPaise,
+    currency: link.currency,
+    status: link.status,
+    isUpiOnly: link.isUpiOnly,
+    expiresAt: link.expiresAt,
+  };
+}
+
+type CommonFields = {
+  allowsPartialPayment: boolean;
+  minPartialAmountInPaise: number | null;
+  expiresAt: Date | null;
+  isUpiOnly: boolean;
+  customerNameOverride: string | null;
+  customerEmailOverride: string | null;
+  customerContactOverride: string | null;
+};
 
 function parseCommonFields(formData: FormData): { error: string } | CommonFields {
   const allowsPartialPayment = formData.get("allowsPartialPayment") === "on";
@@ -28,10 +79,28 @@ function parseCommonFields(formData: FormData): { error: string } | CommonFields
   if (expiresAt && Number.isNaN(expiresAt.getTime())) {
     return { error: "Invalid expiry date." };
   }
+  if (expiresAt && expiresAt.getTime() <= Date.now()) {
+    return { error: "Expiry must be in the future." };
+  }
   if (minPartialAmountInPaise !== null && (!Number.isFinite(minPartialAmountInPaise) || minPartialAmountInPaise < 1)) {
     return { error: "Invalid minimum partial amount." };
   }
-  return { allowsPartialPayment, minPartialAmountInPaise, expiresAt };
+  if (minPartialAmountInPaise !== null && !allowsPartialPayment) {
+    return { error: "A minimum partial amount requires partial payment to be enabled." };
+  }
+  const isUpiOnly = String(formData.get("paymentType") ?? "standard") === "upi";
+  const nameOverride = String(formData.get("customerName") ?? "").trim();
+  const emailOverride = String(formData.get("customerEmail") ?? "").trim();
+  const contactOverride = String(formData.get("customerContact") ?? "").trim();
+  return {
+    allowsPartialPayment,
+    minPartialAmountInPaise,
+    expiresAt,
+    isUpiOnly,
+    customerNameOverride: nameOverride || null,
+    customerEmailOverride: emailOverride || null,
+    customerContactOverride: contactOverride || null,
+  };
 }
 
 function formatCreateError(
@@ -59,7 +128,7 @@ function formatCreateError(
 export async function createPaymentLinkForBillingPeriodAction(
   billingPeriodId: number,
   formData: FormData
-): Promise<ActionResult> {
+): Promise<CreateActionResult> {
   if (!Number.isInteger(billingPeriodId)) return { error: "Payment period not found." };
   const { admin, period } = await requireBillingPeriodInOwnOrg(billingPeriodId);
   if (!period) return { error: "Payment period not found." };
@@ -91,13 +160,13 @@ export async function createPaymentLinkForBillingPeriodAction(
   revalidatePath("/calendar");
   revalidatePath("/payments");
   revalidatePath(`/clients/${clientId}`);
-  return { ok: true };
+  return { ok: true, paymentLink: toSummary(result.paymentLink) };
 }
 
 export async function createPaymentLinkForMilestoneAction(
   milestoneId: number,
   formData: FormData
-): Promise<ActionResult> {
+): Promise<CreateActionResult> {
   if (!Number.isInteger(milestoneId)) return { error: "Milestone not found." };
   const { admin, milestone } = await requireMilestoneInOwnOrg(milestoneId);
   if (!milestone) return { error: "Milestone not found." };
@@ -129,13 +198,13 @@ export async function createPaymentLinkForMilestoneAction(
   revalidatePath("/calendar");
   revalidatePath("/payments");
   revalidatePath(`/clients/${clientId}`);
-  return { ok: true };
+  return { ok: true, paymentLink: toSummary(result.paymentLink) };
 }
 
 export async function createPaymentLinkForAddOnAction(
   addOnId: number,
   formData: FormData
-): Promise<ActionResult> {
+): Promise<CreateActionResult> {
   if (!Number.isInteger(addOnId)) return { error: "Add-on not found." };
   const { admin, addOn } = await requireAddOnInOwnOrg(addOnId);
   if (!addOn) return { error: "Add-on not found." };
@@ -167,13 +236,13 @@ export async function createPaymentLinkForAddOnAction(
   revalidatePath("/calendar");
   revalidatePath("/payments");
   revalidatePath(`/clients/${clientId}`);
-  return { ok: true };
+  return { ok: true, paymentLink: toSummary(result.paymentLink) };
 }
 
 export async function createCustomPaymentLinkAction(
   clientId: number,
   formData: FormData
-): Promise<ActionResult> {
+): Promise<CreateActionResult> {
   if (!Number.isInteger(clientId)) return { error: "Client not found." };
   const { admin, client } = await requireClientInOwnOrg(clientId);
   if (!client) return { error: "Client not found." };
@@ -216,7 +285,7 @@ export async function createCustomPaymentLinkAction(
   revalidatePath("/calendar");
   revalidatePath("/payments");
   revalidatePath(`/clients/${clientId}`);
-  return { ok: true };
+  return { ok: true, paymentLink: toSummary(result.paymentLink) };
 }
 
 export async function cancelPaymentLinkAction(paymentLinkId: number): Promise<ActionResult> {
@@ -245,4 +314,41 @@ export async function cancelPaymentLinkAction(paymentLinkId: number): Promise<Ac
   revalidatePath("/payments");
   revalidatePath(`/clients/${paymentLink.clientId}`);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Read actions for the Payments-page "+ Create Payment Link" modal
+// ---------------------------------------------------------------------------
+
+export type PaymentLinkClientOption = {
+  id: number;
+  businessName: string;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+};
+
+/** Org-scoped client picker list for the create-link modal. */
+export async function getClientsForPaymentLinkAction(): Promise<{ clients: PaymentLinkClientOption[] }> {
+  const admin = await requireAdmin();
+  const clients = await listClients(admin.organizationId);
+  return {
+    clients: clients.map((c) => ({
+      id: c.id,
+      businessName: c.businessName,
+      contactPerson: c.contactPerson,
+      email: c.email,
+      phone: c.phone,
+    })),
+  };
+}
+
+/** Eligible (unpaid, unlinked) obligations for one client, for the "Payment For" step. */
+export async function getClientObligationsForPaymentLinkAction(
+  clientId: number
+): Promise<{ error: string } | EligibleObligations> {
+  if (!Number.isInteger(clientId)) return { error: "Client not found." };
+  const { client } = await requireClientInOwnOrg(clientId);
+  if (!client) return { error: "Client not found." };
+  return getEligibleObligationsForClient(clientId);
 }

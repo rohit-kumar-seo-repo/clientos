@@ -22,6 +22,8 @@ import {
   recordLinkPaymentFailure,
   markLinkExpired,
   markLinkCancelledFromWebhook,
+  getEligibleObligationsForClient,
+  listPaymentLinksForOrg,
   MAX_PAYMENT_LINK_AMOUNT_IN_PAISE,
 } from "@/lib/payment-links";
 
@@ -543,5 +545,72 @@ describe("payment-links", () => {
     });
     const result = await cancelPaymentLinkById(link.id);
     expect(result).toEqual({ error: "not_cancellable" });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Read models for the Payments-page "Create Payment Link" workflow
+  // ---------------------------------------------------------------------------
+
+  it("lists eligible obligations across all three kinds, each with the right amount/currency", async () => {
+    const period = await setupOpenPeriod();
+    const { milestone, addOn } = await setupProjectWithMilestoneAndAddOn();
+
+    const result = await getEligibleObligationsForClient(clientId);
+
+    expect(result.billingPeriods.map((p) => p.id)).toContain(period.id);
+    expect(result.billingPeriods.find((p) => p.id === period.id)?.currency).toBe("INR");
+    expect(result.milestones.map((m) => m.id)).toContain(milestone.id);
+    expect(result.addOns.map((a) => a.id)).toContain(addOn.id);
+  });
+
+  it("excludes obligations that are already fully paid from the eligible list", async () => {
+    const period = await setupOpenPeriod();
+    await prisma.billingPeriod.update({ where: { id: period.id }, data: { status: "PAID" } });
+
+    const result = await getEligibleObligationsForClient(clientId);
+
+    expect(result.billingPeriods.map((p) => p.id)).not.toContain(period.id);
+  });
+
+  it("excludes an obligation with an active link, but includes one whose link was cancelled", async () => {
+    const { milestone } = await setupProjectWithMilestoneAndAddOn();
+    const created = await createPaymentLinkForObligation({
+      kind: "projectMilestone",
+      milestoneId: milestone.id,
+      createdByAdminId: adminId,
+      allowsPartialPayment: false,
+    });
+    if (!("paymentLink" in created)) throw new Error("setup failed");
+
+    const withActiveLink = await getEligibleObligationsForClient(clientId);
+    expect(withActiveLink.milestones.map((m) => m.id)).not.toContain(milestone.id);
+
+    vi.mocked(cancelPaymentLink).mockResolvedValue({} as never);
+    await cancelPaymentLinkById(created.paymentLink.id);
+
+    const afterCancel = await getEligibleObligationsForClient(clientId);
+    expect(afterCancel.milestones.map((m) => m.id)).toContain(milestone.id);
+  });
+
+  it("lists payment links across the org, newest first, scoped away from other orgs", async () => {
+    const period = await setupOpenPeriod();
+    await createLinkForPeriod(period);
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org" } });
+    const otherClient = await prisma.client.create({ data: { organizationId: otherOrg.id, businessName: "Other Client" } });
+    await prisma.paymentLink.create({
+      data: {
+        clientId: otherClient.id,
+        razorpayPaymentLinkId: "plink_other_org",
+        razorpayShortUrl: "https://rzp.io/l/other",
+        description: "Other org link",
+        amountInPaise: 10000,
+        createdByAdminId: adminId,
+      },
+    });
+
+    const result = await listPaymentLinksForOrg(orgId);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].client.id).toBe(clientId);
   });
 });
