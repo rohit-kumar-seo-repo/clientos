@@ -149,6 +149,16 @@ export async function fetchPayment(razorpayPaymentId: string): Promise<RazorpayP
 }
 
 /**
+ * Read-only connectivity check — lists at most one Payment Link, creating
+ * or mutating nothing. Used only to confirm the configured key can actually
+ * authenticate against Razorpay's API, not merely that it's present.
+ */
+export async function verifyApiConnectivity(): Promise<void> {
+  const client = getClient();
+  await client.paymentLink.all({ count: 1 });
+}
+
+/**
  * HMAC-SHA256 verification of a webhook delivery. `rawBody` must be the
  * exact, unparsed request body text — signing is byte-sensitive, so this
  * breaks silently if called with a re-serialized JSON object instead.

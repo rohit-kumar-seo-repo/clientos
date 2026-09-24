@@ -16,5 +16,8 @@ npx prisma migrate deploy
 echo "Checking for an admin account..."
 npx tsx prisma/bootstrap-admin.ts
 
+echo "Checking Razorpay connectivity..."
+npx tsx prisma/check-razorpay.ts
+
 echo "Starting ClientOS..."
 exec "$@"
