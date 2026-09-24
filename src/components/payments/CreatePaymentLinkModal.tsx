@@ -9,6 +9,7 @@ import {
   createPaymentLinkForMilestoneAction,
   createPaymentLinkForAddOnAction,
   createCustomPaymentLinkAction,
+  createNewCustomerPaymentLinkAction,
   type PaymentLinkClientOption,
   type PaymentLinkSummary,
 } from "@/app/(app)/clients/payment-link-actions";
@@ -18,6 +19,10 @@ import type { EligibleObligations } from "@/lib/payment-links";
 // than imported, since that module is server-only (instantiates the
 // Razorpay SDK at module scope) and must never reach a "use client" bundle.
 const CUSTOM_LINK_CURRENCIES = ["INR", "USD", "EUR", "GBP", "AUD", "CAD", "SGD", "AED", "CHF", "HKD", "JPY", "MYR", "NZD", "THB", "ZAR"];
+
+// Sentinel value for the "+ New Customer" entry in the Client selector —
+// distinct from "" (nothing selected) and from any real client id.
+const NEW_CUSTOMER_VALUE = "__new_customer__";
 
 type PaymentForKind = "billingPeriod" | "projectMilestone" | "projectAddOn" | "custom";
 
@@ -56,8 +61,11 @@ export function CreatePaymentLinkModal() {
   const [allowsPartialPayment, setAllowsPartialPayment] = useState(false);
   const [minPartialAmount, setMinPartialAmount] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [saveAsClient, setSaveAsClient] = useState(false);
 
   const [result, setResult] = useState<{ summary: PaymentLinkSummary; meta: ResultMeta } | null>(null);
+
+  const isNewCustomer = clientId === NEW_CUSTOMER_VALUE;
 
   function resetForm() {
     setClientId("");
@@ -74,6 +82,7 @@ export function CreatePaymentLinkModal() {
     setAllowsPartialPayment(false);
     setMinPartialAmount("");
     setExpiresAt("");
+    setSaveAsClient(false);
     setError(null);
     setResult(null);
   }
@@ -95,6 +104,16 @@ export function CreatePaymentLinkModal() {
     setClientId(value);
     setObligationId("");
     setObligations(EMPTY_OBLIGATIONS);
+    setSaveAsClient(false);
+
+    if (value === NEW_CUSTOMER_VALUE) {
+      setCustomerName("");
+      setCustomerEmail("");
+      setCustomerContact("");
+      setPaymentFor("custom");
+      return;
+    }
+
     const client = clients?.find((c) => c.id === Number(value));
     setCustomerName(client?.contactPerson ?? client?.businessName ?? "");
     setCustomerEmail(client?.email ?? "");
@@ -137,27 +156,49 @@ export function CreatePaymentLinkModal() {
   const canSubmit =
     Boolean(clientId) &&
     (paymentFor === "custom"
-      ? Boolean(customAmount) && Number(customAmount) > 0 && Boolean(customDescription.trim())
+      ? Boolean(customAmount) &&
+        Number(customAmount) > 0 &&
+        Boolean(customDescription.trim()) &&
+        (!isNewCustomer || Boolean(customerName.trim()))
       : Boolean(obligationId));
 
   async function handleSubmit() {
-    if (!canSubmit || !selectedClient) return;
+    if (!canSubmit) return;
     setPending(true);
     setError(null);
 
     const fd = commonFormData();
     let res: { error: string } | { ok: true; paymentLink: PaymentLinkSummary };
     let paymentForLabel: string;
+    let customerLabel: string;
 
-    if (paymentFor === "custom") {
+    if (isNewCustomer) {
+      fd.set("amountInRupees", customAmount);
+      fd.set("currency", customCurrency);
+      fd.set("description", customDescription.trim());
+      if (saveAsClient) fd.set("saveAsClient", "on");
+      res = await createNewCustomerPaymentLinkAction(fd);
+      paymentForLabel = `Custom — ${customDescription.trim()}`;
+      customerLabel = customerName.trim();
+    } else if (paymentFor === "custom") {
+      if (!selectedClient) {
+        setPending(false);
+        return;
+      }
       fd.set("amountInRupees", customAmount);
       fd.set("currency", customCurrency);
       fd.set("description", customDescription.trim());
       res = await createCustomPaymentLinkAction(Number(clientId), fd);
       paymentForLabel = `Custom — ${customDescription.trim()}`;
+      customerLabel = customerName.trim() || selectedClient.businessName;
     } else {
+      if (!selectedClient) {
+        setPending(false);
+        return;
+      }
       const id = Number(obligationId);
       paymentForLabel = selectedObligation?.label ?? "—";
+      customerLabel = customerName.trim() || selectedClient.businessName;
       if (paymentFor === "billingPeriod") res = await createPaymentLinkForBillingPeriodAction(id, fd);
       else if (paymentFor === "projectMilestone") res = await createPaymentLinkForMilestoneAction(id, fd);
       else res = await createPaymentLinkForAddOnAction(id, fd);
@@ -170,7 +211,7 @@ export function CreatePaymentLinkModal() {
     }
     setResult({
       summary: res.paymentLink,
-      meta: { customerLabel: customerName.trim() || selectedClient.businessName, paymentForLabel },
+      meta: { customerLabel, paymentForLabel },
     });
     router.refresh();
   }
@@ -289,6 +330,7 @@ export function CreatePaymentLinkModal() {
                   className="w-full rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
                 >
                   <option value="">{clients ? "Select a client…" : "Loading clients…"}</option>
+                  <option value={NEW_CUSTOMER_VALUE}>+ New Customer</option>
                   {clients?.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.businessName}
@@ -299,10 +341,11 @@ export function CreatePaymentLinkModal() {
 
               {clientId && (
                 <div className="grid grid-cols-3 gap-2">
-                  <Field label="Customer Name">
+                  <Field label={isNewCustomer ? "Customer Name *" : "Customer Name"}>
                     <input
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder={isNewCustomer ? "Required" : undefined}
                       className="w-full rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
                     />
                   </Field>
@@ -324,7 +367,14 @@ export function CreatePaymentLinkModal() {
                 </div>
               )}
 
-              {clientId && (
+              {isNewCustomer && (
+                <label className="flex items-center gap-1.5 text-sm text-neutral-700">
+                  <input type="checkbox" checked={saveAsClient} onChange={(e) => setSaveAsClient(e.target.checked)} />
+                  Save this customer as a ClientOS client
+                </label>
+              )}
+
+              {clientId && !isNewCustomer && (
                 <Field label="Payment For">
                   <select
                     value={paymentFor}

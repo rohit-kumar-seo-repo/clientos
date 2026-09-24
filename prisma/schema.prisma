@@ -187,6 +187,7 @@ model Organization {
   webhookEvents    WebhookEvent[]
   reminderRules    ReminderRule[]
   auditLogs        AuditLog[]
+  paymentLinks     PaymentLink[]
 
   @@map("organizations")
 }
@@ -531,7 +532,7 @@ model BillingPeriod {
 // silently changes.
 model Invoice {
   id                 Int           @id @default(autoincrement())
-  clientId           Int
+  clientId           Int? // nullable: a client-less "new customer" Payment Link's invoice has no Client to attach to
   invoiceNumber      String        @unique @db.VarChar(20) // e.g. "INV-8F3K2Q" — the only reference ever shown to the client
   totalAmountInPaise Int
   currency           String        @default("INR") @db.VarChar(3)
@@ -540,7 +541,7 @@ model Invoice {
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
-  client Client @relation(fields: [clientId], references: [id])
+  client Client? @relation(fields: [clientId], references: [id])
 
   lineItems InvoiceLineItem[]
   payments  Payment[]
@@ -632,7 +633,8 @@ model Payment {
 // history stays intact.
 model PaymentLink {
   id                      Int               @id @default(autoincrement())
-  clientId                Int
+  organizationId          Int // direct org scope — required so a client-less link (no Client to derive org from) is still org-isolated
+  clientId                Int? // nullable: a "new customer" link with "save as client" unchecked has no Client
   billingPeriodId         Int?
   projectMilestoneId      Int?
   projectAddOnId          Int?
@@ -647,10 +649,17 @@ model PaymentLink {
   expiresAt               DateTime?
   status                  PaymentLinkStatus @default(CREATED)
   createdByAdminId        Int?
+  // The payer's identity as sent to Razorpay, persisted so the link/payment
+  // stays identifiable even with no Client record (clientId null). Also
+  // populated for client-based links, mirroring whatever was actually sent.
+  customerName            String?           @db.VarChar(150)
+  customerEmail           String?           @db.VarChar(191)
+  customerPhone           String?           @db.VarChar(20)
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
 
-  client           Client            @relation(fields: [clientId], references: [id])
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  client           Client?           @relation(fields: [clientId], references: [id])
   billingPeriod    BillingPeriod?    @relation(fields: [billingPeriodId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   projectMilestone ProjectMilestone? @relation(fields: [projectMilestoneId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   projectAddOn     ProjectAddOn?     @relation(fields: [projectAddOnId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -658,6 +667,7 @@ model PaymentLink {
 
   payments Payment[]
 
+  @@index([organizationId])
   @@index([clientId])
   @@index([billingPeriodId])
   @@index([projectMilestoneId])

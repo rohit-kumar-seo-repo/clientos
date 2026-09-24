@@ -62,6 +62,19 @@ export type CreatePaymentLinkInput =
       amountInPaise: number;
       currency: string;
       description: string;
+    } & CommonCreateFields)
+  | ({
+      // No existing Client — the payer's identity travels as
+      // customerNameOverride/etc. (required here) instead of via a Client
+      // relation. Obligations belong to existing clients (see
+      // findActiveLinkFor's callers), so this kind is custom-amount only —
+      // there is no obligation a brand-new customer could already own.
+      kind: "newCustomer";
+      organizationId: number;
+      saveAsClient: boolean;
+      amountInPaise: number;
+      currency: string;
+      description: string;
     } & CommonCreateFields);
 
 export type CreatePaymentLinkResult =
@@ -71,7 +84,7 @@ export type CreatePaymentLinkResult =
   | { error: "unsupported_currency" }
   | { error: "invalid_amount" }
   | { error: "razorpay_error"; message: string }
-  | { paymentLink: PaymentLink; clientId: number };
+  | { paymentLink: PaymentLink; clientId: number | null };
 
 async function findActiveLinkFor(
   column: "billingPeriodId" | "projectMilestoneId" | "projectAddOnId",
@@ -99,6 +112,7 @@ export async function createPaymentLinkForObligation(
     return createAndPersistLink({
       ...input,
       clientId: client.id,
+      organizationId: client.organizationId,
       amountInPaise: period.amountInPaise,
       currency: period.billingPlan.currency,
       description: `${client.businessName} — billing period ${period.periodLabel}`,
@@ -121,6 +135,7 @@ export async function createPaymentLinkForObligation(
     return createAndPersistLink({
       ...input,
       clientId: client.id,
+      organizationId: client.organizationId,
       amountInPaise: milestone.amountInPaise,
       currency: "INR", // projects carry no currency field of their own — always INR, matching Invoice's default
       description: `${milestone.project.title} — ${milestone.label}`,
@@ -143,6 +158,7 @@ export async function createPaymentLinkForObligation(
     return createAndPersistLink({
       ...input,
       clientId: client.id,
+      organizationId: client.organizationId,
       amountInPaise: addOn.amountInPaise,
       currency: "INR",
       description: `${addOn.project.title} — ${addOn.description}`,
@@ -151,34 +167,66 @@ export async function createPaymentLinkForObligation(
     });
   }
 
-  // kind === "custom"
+  if (input.kind === "custom") {
+    if (!Number.isInteger(input.amountInPaise) || input.amountInPaise < 1 || input.amountInPaise > MAX_PAYMENT_LINK_AMOUNT_IN_PAISE) {
+      return { error: "invalid_amount" };
+    }
+    if (!isSupportedCurrency(input.currency)) {
+      return { error: "unsupported_currency" };
+    }
+    const client = await prisma.client.findUnique({ where: { id: input.clientId } });
+    if (!client) return { error: "not_found" };
+    return createAndPersistLink({
+      ...input,
+      clientId: client.id,
+      organizationId: client.organizationId,
+      amountInPaise: input.amountInPaise,
+      currency: input.currency.toUpperCase(),
+      description: input.description,
+      client,
+    });
+  }
+
+  // kind === "newCustomer" — no existing Client; obligations always belong
+  // to a real client, so this path is custom-amount only.
   if (!Number.isInteger(input.amountInPaise) || input.amountInPaise < 1 || input.amountInPaise > MAX_PAYMENT_LINK_AMOUNT_IN_PAISE) {
     return { error: "invalid_amount" };
   }
   if (!isSupportedCurrency(input.currency)) {
     return { error: "unsupported_currency" };
   }
-  const client = await prisma.client.findUnique({ where: { id: input.clientId } });
-  if (!client) return { error: "not_found" };
   return createAndPersistLink({
     ...input,
-    clientId: client.id,
+    clientId: null,
     amountInPaise: input.amountInPaise,
     currency: input.currency.toUpperCase(),
     description: input.description,
-    client,
+    client: null,
+    createClientWithData: input.saveAsClient
+      ? {
+          businessName: input.customerNameOverride ?? "New Customer",
+          email: input.customerEmailOverride ?? null,
+          phone: input.customerContactOverride ?? null,
+        }
+      : null,
   });
 }
 
 type PersistArgs = CommonCreateFields & {
-  clientId: number;
+  clientId: number | null;
+  organizationId: number;
   amountInPaise: number;
   currency: string;
   description: string;
-  client: { businessName: string; contactPerson: string | null; email: string | null; phone: string | null };
+  client: { businessName: string; contactPerson: string | null; email: string | null; phone: string | null } | null;
   billingPeriodId?: number;
   projectMilestoneId?: number;
   projectAddOnId?: number;
+  // Set only for a "new customer, save as client" link: the Client row and
+  // the PaymentLink row are created together in one transaction, after
+  // Razorpay confirms the link — so a failed Razorpay call never leaves an
+  // orphaned Client with nothing to show for it.
+  createClientWithData?: { businessName: string; email: string | null; phone: string | null } | null;
 };
 
 async function createAndPersistLink(args: PersistArgs): Promise<CreatePaymentLinkResult> {
@@ -186,15 +234,19 @@ async function createAndPersistLink(args: PersistArgs): Promise<CreatePaymentLin
     return { error: "invalid_amount" };
   }
 
+  const customerName = args.customerNameOverride ?? args.client?.contactPerson ?? args.client?.businessName ?? "Customer";
+  const customerEmail = args.customerEmailOverride ?? args.client?.email ?? null;
+  const customerContact = args.customerContactOverride ?? args.client?.phone ?? null;
+
   let razorpayLink;
   try {
     razorpayLink = await razorpayCreatePaymentLink({
       amountInPaise: args.amountInPaise,
       currency: args.currency,
       description: args.description,
-      customerName: args.customerNameOverride ?? args.client.contactPerson ?? args.client.businessName,
-      customerEmail: args.customerEmailOverride ?? args.client.email,
-      customerContact: args.customerContactOverride ?? args.client.phone,
+      customerName,
+      customerEmail,
+      customerContact,
       acceptPartial: args.allowsPartialPayment,
       firstMinPartialAmountInPaise: args.minPartialAmountInPaise ?? null,
       expireBy: args.expiresAt ?? null,
@@ -208,27 +260,45 @@ async function createAndPersistLink(args: PersistArgs): Promise<CreatePaymentLin
   // local record. Accepted for V1 — no saga/compensating-transaction system;
   // the settings/razorpay page's future "sync" affordance (not built in this
   // phase) would be the upgrade path if this ever proves to matter in practice.
-  const paymentLink = await prisma.paymentLink.create({
-    data: {
-      clientId: args.clientId,
-      billingPeriodId: args.billingPeriodId ?? null,
-      projectMilestoneId: args.projectMilestoneId ?? null,
-      projectAddOnId: args.projectAddOnId ?? null,
-      razorpayPaymentLinkId: razorpayLink.id,
-      razorpayShortUrl: razorpayLink.short_url,
-      description: args.description,
-      amountInPaise: args.amountInPaise,
-      currency: args.currency,
-      allowsPartialPayment: args.allowsPartialPayment,
-      minPartialAmountInPaise: args.minPartialAmountInPaise ?? null,
-      isUpiOnly: args.isUpiOnly ?? false,
-      expiresAt: args.expiresAt ?? null,
-      status: "CREATED",
-      createdByAdminId: args.createdByAdminId,
-    },
+  const paymentLink = await prisma.$transaction(async (tx) => {
+    let clientId = args.clientId;
+    if (args.createClientWithData) {
+      const newClient = await tx.client.create({
+        data: {
+          organizationId: args.organizationId,
+          businessName: args.createClientWithData.businessName,
+          email: args.createClientWithData.email,
+          phone: args.createClientWithData.phone,
+        },
+      });
+      clientId = newClient.id;
+    }
+    return tx.paymentLink.create({
+      data: {
+        organizationId: args.organizationId,
+        clientId,
+        billingPeriodId: args.billingPeriodId ?? null,
+        projectMilestoneId: args.projectMilestoneId ?? null,
+        projectAddOnId: args.projectAddOnId ?? null,
+        razorpayPaymentLinkId: razorpayLink.id,
+        razorpayShortUrl: razorpayLink.short_url,
+        description: args.description,
+        amountInPaise: args.amountInPaise,
+        currency: args.currency,
+        allowsPartialPayment: args.allowsPartialPayment,
+        minPartialAmountInPaise: args.minPartialAmountInPaise ?? null,
+        isUpiOnly: args.isUpiOnly ?? false,
+        expiresAt: args.expiresAt ?? null,
+        status: "CREATED",
+        createdByAdminId: args.createdByAdminId,
+        customerName,
+        customerEmail,
+        customerPhone: customerContact,
+      },
+    });
   });
 
-  return { paymentLink, clientId: args.clientId };
+  return { paymentLink, clientId: paymentLink.clientId };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +309,7 @@ export type CancelPaymentLinkResult =
   | { error: "not_found" }
   | { error: "not_cancellable" }
   | { error: "razorpay_error"; message: string }
-  | { paymentLink: PaymentLink; clientId: number };
+  | { paymentLink: PaymentLink; clientId: number | null };
 
 export async function cancelPaymentLinkById(paymentLinkId: number): Promise<CancelPaymentLinkResult> {
   const link = await prisma.paymentLink.findUnique({ where: { id: paymentLinkId } });
@@ -281,7 +351,7 @@ export type RecordLinkPaymentResult =
   | { error: "already_fully_paid" }
   | { error: "amount_mismatch"; expected: number; got: number }
   | { error: "currency_mismatch"; expected: string; got: string }
-  | { ok: true; clientId: number; fullyPaid: boolean; obligationLabel: string };
+  | { ok: true; clientId: number | null; fullyPaid: boolean; obligationLabel: string };
 
 /**
  * Records a verified, successful (or partially-successful) Razorpay payment
@@ -510,7 +580,7 @@ export type RecordLinkFailureInput = {
  */
 export async function recordLinkPaymentFailure(
   input: RecordLinkFailureInput
-): Promise<{ error: "link_not_found" } | { ok: true; clientId: number; recorded: boolean }> {
+): Promise<{ error: "link_not_found" } | { ok: true; clientId: number | null; recorded: boolean }> {
   const link = await prisma.paymentLink.findUnique({ where: { razorpayPaymentLinkId: input.razorpayPaymentLinkId } });
   if (!link) return { error: "link_not_found" };
 
@@ -538,7 +608,7 @@ export async function recordLinkPaymentFailure(
   return { ok: true, clientId: link.clientId, recorded: true };
 }
 
-export async function markLinkExpired(razorpayPaymentLinkId: string): Promise<{ error: "link_not_found" } | { ok: true; clientId: number }> {
+export async function markLinkExpired(razorpayPaymentLinkId: string): Promise<{ error: "link_not_found" } | { ok: true; clientId: number | null }> {
   const link = await prisma.paymentLink.findUnique({ where: { razorpayPaymentLinkId } });
   if (!link) return { error: "link_not_found" };
   if (link.status === "PAID" || link.status === "CANCELLED") return { ok: true, clientId: link.clientId };
@@ -549,7 +619,7 @@ export async function markLinkExpired(razorpayPaymentLinkId: string): Promise<{ 
   return { ok: true, clientId: link.clientId };
 }
 
-export async function markLinkCancelledFromWebhook(razorpayPaymentLinkId: string): Promise<{ error: "link_not_found" } | { ok: true; clientId: number }> {
+export async function markLinkCancelledFromWebhook(razorpayPaymentLinkId: string): Promise<{ error: "link_not_found" } | { ok: true; clientId: number | null }> {
   const link = await prisma.paymentLink.findUnique({ where: { razorpayPaymentLinkId } });
   if (!link) return { error: "link_not_found" };
   if (link.status === "PAID" || link.status === "CANCELLED") return { ok: true, clientId: link.clientId };
@@ -619,10 +689,14 @@ export async function getEligibleObligationsForClient(clientId: number): Promise
   };
 }
 
-/** All Payment Links across the org, newest first — for the Payments page. */
+/**
+ * All Payment Links across the org, newest first — for the Payments page.
+ * Filters on the link's own organizationId (not client.organizationId) so a
+ * client-less "new customer" link is still correctly included.
+ */
 export async function listPaymentLinksForOrg(organizationId: number) {
   return prisma.paymentLink.findMany({
-    where: { client: { organizationId } },
+    where: { organizationId },
     include: { client: true },
     orderBy: { createdAt: "desc" },
   });

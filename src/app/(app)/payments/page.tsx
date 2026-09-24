@@ -19,9 +19,17 @@ export default async function PaymentsPage({
 
   const payments = await prisma.payment.findMany({
     where: {
-      invoice: { client: { organizationId: admin.organizationId } },
+      // A client-less "new customer" payment has no invoice.client to filter
+      // on — org-scope it via its PaymentLink instead (every Payment from a
+      // link carries paymentLinkId; a manual payment always has a real
+      // client and matches the first clause).
+      OR: [
+        { invoice: { client: { organizationId: admin.organizationId } } },
+        { paymentLink: { organizationId: admin.organizationId } },
+      ],
     },
     include: {
+      paymentLink: { select: { customerName: true } },
       invoice: {
         include: {
           client: true,
@@ -276,7 +284,7 @@ export default async function PaymentsPage({
                         })}
                       </td>
                       <td className="px-4 py-3 font-medium text-neutral-900">
-                        {payment.invoice.client.businessName}
+                        {payment.invoice.client?.businessName ?? payment.paymentLink?.customerName ?? "—"}
                       </td>
                       <td className="px-4 py-3 text-neutral-700">
                         {paymentName(payment)}
@@ -326,12 +334,14 @@ export default async function PaymentsPage({
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <Link
-                          href={`/clients/${payment.invoice.clientId}`}
-                          className="text-xs text-neutral-500 hover:text-neutral-900 hover:underline"
-                        >
-                          View
-                        </Link>
+                        {payment.invoice.clientId && (
+                          <Link
+                            href={`/clients/${payment.invoice.clientId}`}
+                            className="text-xs text-neutral-500 hover:text-neutral-900 hover:underline"
+                          >
+                            View
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   );

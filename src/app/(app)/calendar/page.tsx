@@ -40,9 +40,15 @@ export default async function CalendarPage({
       where: {
         status: "CAPTURED",
         capturedAt: { gte: windowStart, lt: windowEnd },
-        invoice: { client: { organizationId: admin.organizationId } },
+        // A client-less "new customer" payment has no invoice.client — org-
+        // scope it via its PaymentLink instead (see payments/page.tsx).
+        OR: [
+          { invoice: { client: { organizationId: admin.organizationId } } },
+          { paymentLink: { organizationId: admin.organizationId } },
+        ],
       },
       include: {
+        paymentLink: { select: { customerName: true } },
         invoice: {
           include: {
             client: true,
@@ -114,7 +120,7 @@ export default async function CalendarPage({
     if (!p.capturedAt) continue;
     const date = toISTDateStr(p.capturedAt);
     const item = p.invoice.lineItems[0];
-    const clientName = p.invoice.client.businessName;
+    const clientName = p.invoice.client?.businessName ?? p.paymentLink?.customerName ?? "Unknown customer";
     let description = "Payment";
     let kind: CalendarEvent["kind"] = "recurring";
 

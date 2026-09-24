@@ -23,6 +23,7 @@ import { createPaymentLink } from "@/lib/razorpay";
 import {
   createPaymentLinkForBillingPeriodAction,
   createCustomPaymentLinkAction,
+  createNewCustomerPaymentLinkAction,
   cancelPaymentLinkAction,
   getClientsForPaymentLinkAction,
   getClientObligationsForPaymentLinkAction,
@@ -304,5 +305,141 @@ describe("payment-link-actions", () => {
     const result = await getClientObligationsForPaymentLinkAction(clientId);
 
     expect(result).toEqual({ error: "Client not found." });
+  });
+
+  // ---------------------------------------------------------------------------
+  // New Customer workflow
+  // ---------------------------------------------------------------------------
+
+  function newCustomerForm(overrides: Record<string, string> = {}): FormData {
+    const fd = new FormData();
+    fd.set("customerName", "Priya Sharma");
+    fd.set("customerEmail", "priya@example.com");
+    fd.set("customerContact", "9123456780");
+    fd.set("amountInRupees", "1000");
+    fd.set("currency", "INR");
+    fd.set("description", "Logo design deposit");
+    for (const [k, v] of Object.entries(overrides)) fd.set(k, v);
+    return fd;
+  }
+
+  it("creates a custom payment link for a brand-new customer with no ClientOS client", async () => {
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm());
+
+    expect(result).toMatchObject({ ok: true, paymentLink: { amountInPaise: 100000, currency: "INR" } });
+    const link = await prisma.paymentLink.findFirstOrThrow({ where: { description: "Logo design deposit" } });
+    expect(link.clientId).toBeNull();
+    expect(link.organizationId).toBe(orgId);
+    expect(link.customerName).toBe("Priya Sharma");
+    expect(link.customerEmail).toBe("priya@example.com");
+    expect(link.customerPhone).toBe("9123456780");
+    expect(createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ customerName: "Priya Sharma", customerEmail: "priya@example.com", customerContact: "9123456780" })
+    );
+  });
+
+  it("never creates a Payment record at link-creation time for a new customer", async () => {
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm());
+    if (!("paymentLink" in result)) throw new Error("setup failed");
+
+    const payments = await prisma.payment.findMany({ where: { paymentLinkId: result.paymentLink.id } });
+    expect(payments).toHaveLength(0);
+  });
+
+  it("creates no ClientOS client when 'save as client' is unchecked (the no-client path)", async () => {
+    await createNewCustomerPaymentLinkAction(newCustomerForm());
+
+    const clients = await prisma.client.findMany({ where: { organizationId: orgId } });
+    // Only the one seeded in beforeEach — no second/placeholder client appeared.
+    expect(clients).toHaveLength(1);
+    expect(clients[0].id).toBe(clientId);
+  });
+
+  it("creates and links a real ClientOS client when 'save as client' is checked", async () => {
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm({ saveAsClient: "on" }));
+    if (!("paymentLink" in result)) throw new Error("setup failed");
+
+    expect(result.paymentLink).toBeTruthy();
+    const link = await prisma.paymentLink.findFirstOrThrow({ where: { id: result.paymentLink.id } });
+    expect(link.clientId).not.toBeNull();
+
+    const newClient = await prisma.client.findUniqueOrThrow({ where: { id: link.clientId! } });
+    expect(newClient.businessName).toBe("Priya Sharma");
+    expect(newClient.email).toBe("priya@example.com");
+    expect(newClient.phone).toBe("9123456780");
+    expect(newClient.organizationId).toBe(orgId);
+
+    const activity = await prisma.clientActivity.findFirstOrThrow({
+      where: { clientId: newClient.id, eventType: "payment_link.created" },
+    });
+    expect(activity.actorAdminId).toBe(adminId);
+  });
+
+  it("leaves the existing-client workflow unchanged (regression)", async () => {
+    const form = new FormData();
+    form.set("amountInRupees", "500");
+    form.set("currency", "INR");
+    form.set("description", "Unchanged flow check");
+
+    const result = await createCustomPaymentLinkAction(clientId, form);
+
+    expect(result).toMatchObject({ ok: true, paymentLink: { currency: "INR", amountInPaise: 50000 } });
+    const link = await prisma.paymentLink.findFirstOrThrow({ where: { description: "Unchanged flow check" } });
+    expect(link.clientId).toBe(clientId);
+  });
+
+  it("ignores an obligation id smuggled into a new-customer submission — new customer can never attach to an existing obligation", async () => {
+    const period = await setupOpenPeriod();
+
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm({ billingPeriodId: String(period.id) }));
+
+    expect(result).toMatchObject({ ok: true });
+    const link = await prisma.paymentLink.findFirstOrThrow({ where: { description: "Logo design deposit" } });
+    expect(link.billingPeriodId).toBeNull();
+    expect(link.clientId).toBeNull();
+    // The real obligation is untouched — no link was ever attached to it.
+    const linksOnPeriod = await prisma.paymentLink.findMany({ where: { billingPeriodId: period.id } });
+    expect(linksOnPeriod).toHaveLength(0);
+  });
+
+  it("rejects a new-customer link with a missing customer name", async () => {
+    const form = newCustomerForm();
+    form.delete("customerName");
+
+    const result = await createNewCustomerPaymentLinkAction(form);
+    expect(result).toEqual({ error: "Customer name is required." });
+  });
+
+  it("rejects a new-customer link with an invalid amount", async () => {
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm({ amountInRupees: "-5" }));
+    expect(result).toEqual({ error: "Amount must be between ₹0.01 and ₹1,00,00,000." });
+  });
+
+  it("rejects a new-customer link with an unsupported currency", async () => {
+    const result = await createNewCustomerPaymentLinkAction(newCustomerForm({ currency: "ZZZ" }));
+    expect(result).toEqual({ error: "That currency isn't supported." });
+  });
+
+  it("rejects a new-customer link with a missing description", async () => {
+    const form = newCustomerForm();
+    form.delete("description");
+
+    const result = await createNewCustomerPaymentLinkAction(form);
+    expect(result).toEqual({ error: "A description is required." });
+  });
+
+  it("scopes a new customer's payment link to the creating admin's own org", async () => {
+    await createNewCustomerPaymentLinkAction(newCustomerForm());
+
+    const listed = await getClientsForPaymentLinkAction();
+    // The new-customer link created no client, so the client list is untouched...
+    expect(listed.clients.map((c) => c.businessName)).toEqual(["ABC Interiors"]);
+
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org" } });
+    mockAdmin(otherOrg.id);
+    // ...and an admin in a different org can't see or act on it.
+    const link = await prisma.paymentLink.findFirstOrThrow({ where: { description: "Logo design deposit" } });
+    const cancelResult = await cancelPaymentLinkAction(link.id);
+    expect(cancelResult).toEqual({ error: "Payment link not found." });
   });
 });

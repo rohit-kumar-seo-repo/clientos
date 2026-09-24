@@ -263,6 +263,110 @@ describe("payment-links", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // New Customer (client-less) links
+  // ---------------------------------------------------------------------------
+
+  it("creates a client-less link when saveAsClient is false", async () => {
+    const result = await createPaymentLinkForObligation({
+      kind: "newCustomer",
+      organizationId: orgId,
+      saveAsClient: false,
+      amountInPaise: 100000,
+      currency: "INR",
+      description: "New customer deposit",
+      createdByAdminId: adminId,
+      allowsPartialPayment: false,
+      customerNameOverride: "Priya Sharma",
+      customerEmailOverride: "priya@example.com",
+      customerContactOverride: "9123456780",
+    });
+    expect("paymentLink" in result).toBe(true);
+    if ("paymentLink" in result) {
+      expect(result.paymentLink.clientId).toBeNull();
+      expect(result.paymentLink.organizationId).toBe(orgId);
+      expect(result.paymentLink.customerName).toBe("Priya Sharma");
+      expect(result.clientId).toBeNull();
+    }
+    const clients = await prisma.client.findMany({ where: { organizationId: orgId } });
+    expect(clients).toHaveLength(1); // only the one from beforeEach — no placeholder created
+  });
+
+  it("creates and links a Client atomically when saveAsClient is true", async () => {
+    const result = await createPaymentLinkForObligation({
+      kind: "newCustomer",
+      organizationId: orgId,
+      saveAsClient: true,
+      amountInPaise: 100000,
+      currency: "INR",
+      description: "New customer deposit, saved",
+      createdByAdminId: adminId,
+      allowsPartialPayment: false,
+      customerNameOverride: "Arjun Mehta",
+      customerEmailOverride: "arjun@example.com",
+      customerContactOverride: "9988776655",
+    });
+    expect("paymentLink" in result).toBe(true);
+    if (!("paymentLink" in result)) throw new Error("setup failed");
+    expect(result.paymentLink.clientId).not.toBeNull();
+    const newClient = await prisma.client.findUniqueOrThrow({ where: { id: result.paymentLink.clientId! } });
+    expect(newClient.businessName).toBe("Arjun Mehta");
+    expect(newClient.organizationId).toBe(orgId);
+  });
+
+  it("never leaves an orphaned Client when Razorpay's API call fails for a new customer", async () => {
+    vi.mocked(createPaymentLink).mockRejectedValueOnce(new Error("network error"));
+    const result = await createPaymentLinkForObligation({
+      kind: "newCustomer",
+      organizationId: orgId,
+      saveAsClient: true,
+      amountInPaise: 100000,
+      currency: "INR",
+      description: "Should fail before any client is created",
+      createdByAdminId: adminId,
+      allowsPartialPayment: false,
+      customerNameOverride: "Never Created",
+    });
+    expect(result).toMatchObject({ error: "razorpay_error" });
+    const clients = await prisma.client.findMany({ where: { businessName: "Never Created" } });
+    expect(clients).toHaveLength(0);
+  });
+
+  it("records a real webhook-driven payment correctly on a client-less link", async () => {
+    const created = await createPaymentLinkForObligation({
+      kind: "newCustomer",
+      organizationId: orgId,
+      saveAsClient: false,
+      amountInPaise: 250000,
+      currency: "INR",
+      description: "Client-less payment",
+      createdByAdminId: adminId,
+      allowsPartialPayment: false,
+      customerNameOverride: "Priya Sharma",
+    });
+    if (!("paymentLink" in created)) throw new Error("setup failed");
+    const link = created.paymentLink;
+
+    const result = await recordLinkPayment({
+      razorpayPaymentLinkId: link.razorpayPaymentLinkId,
+      razorpayPaymentId: "pay_no_client",
+      razorpayOrderId: null,
+      amountInPaise: link.amountInPaise,
+      currency: link.currency,
+      cumulativeAmountPaidInPaise: link.amountInPaise,
+      capturedAt: new Date(),
+    });
+
+    expect(result).toMatchObject({ ok: true, fullyPaid: true, clientId: null });
+    const payment = await prisma.payment.findFirstOrThrow({ where: { paymentLinkId: link.id } });
+    expect(payment.status).toBe("CAPTURED");
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: payment.invoiceId } });
+    expect(invoice.clientId).toBeNull();
+    expect(invoice.status).toBe("PAID");
+    const updatedLink = await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } });
+    expect(updatedLink.status).toBe("PAID");
+  });
+
+  // ---------------------------------------------------------------------------
   // recordLinkPayment — the webhook-driven success path
   // ---------------------------------------------------------------------------
 
@@ -599,6 +703,7 @@ describe("payment-links", () => {
     const otherClient = await prisma.client.create({ data: { organizationId: otherOrg.id, businessName: "Other Client" } });
     await prisma.paymentLink.create({
       data: {
+        organizationId: otherOrg.id,
         clientId: otherClient.id,
         razorpayPaymentLinkId: "plink_other_org",
         razorpayShortUrl: "https://rzp.io/l/other",
@@ -611,6 +716,6 @@ describe("payment-links", () => {
     const result = await listPaymentLinksForOrg(orgId);
 
     expect(result).toHaveLength(1);
-    expect(result[0].client.id).toBe(clientId);
+    expect(result[0].client?.id).toBe(clientId);
   });
 });

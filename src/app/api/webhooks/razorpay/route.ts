@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
   try {
     webhookEvent = await prisma.webhookEvent.create({
       data: {
-        organizationId: ourLink?.client.organizationId ?? (await getFallbackOrgId()),
+        organizationId: ourLink?.organizationId ?? (await getFallbackOrgId()),
         razorpayEventId: eventKey,
         eventType: body.event,
         payload: body as unknown as Prisma.InputJsonValue,
@@ -181,9 +181,19 @@ async function getFallbackOrgId(): Promise<number> {
   return org.id;
 }
 
+// A client-less "new customer" link has no Client to attach a ClientActivity
+// to — every write below is skipped (not errored) when clientId is null.
+async function createActivityIfClient(
+  clientId: number | null,
+  data: { eventType: string; summary: string }
+) {
+  if (!clientId) return;
+  await prisma.clientActivity.create({ data: { clientId, ...data } });
+}
+
 async function processEvent(
   body: RazorpayWebhookBody,
-  linkClientId: number,
+  linkClientId: number | null,
   razorpayPaymentLinkId: string
 ): Promise<{ clientId: number | null; anomaly?: string }> {
   switch (body.event) {
@@ -216,22 +226,16 @@ async function processEvent(
       if ("error" in result) {
         if (result.error === "already_fully_paid") return { clientId: linkClientId };
         const anomaly = `recordLinkPayment failed: ${JSON.stringify(result)}`;
-        await prisma.clientActivity.create({
-          data: {
-            clientId: linkClientId,
-            eventType: "payment_link.anomaly",
-            summary: `Razorpay payment ${paymentId} did not match the expected amount/currency for this payment link — not marked paid. Needs manual review.`,
-          },
+        await createActivityIfClient(linkClientId, {
+          eventType: "payment_link.anomaly",
+          summary: `Razorpay payment ${paymentId} did not match the expected amount/currency for this payment link — not marked paid. Needs manual review.`,
         });
         return { clientId: linkClientId, anomaly };
       }
 
-      await prisma.clientActivity.create({
-        data: {
-          clientId: linkClientId,
-          eventType: "payment.recorded",
-          summary: `Payment of ₹${(Number(paymentEntity.amount) / 100).toLocaleString("en-IN")} received via Razorpay for ${result.obligationLabel}${result.fullyPaid ? "" : " (partial)"}.`,
-        },
+      await createActivityIfClient(linkClientId, {
+        eventType: "payment.recorded",
+        summary: `Payment of ₹${(Number(paymentEntity.amount) / 100).toLocaleString("en-IN")} received via Razorpay for ${result.obligationLabel}${result.fullyPaid ? "" : " (partial)"}.`,
       });
       return { clientId: linkClientId };
     }
@@ -248,12 +252,9 @@ async function processEvent(
         failureReason: paymentEntity.error_description ?? null,
       });
       if ("error" in result) return { clientId: null, anomaly: "payment.failed: link not found" };
-      await prisma.clientActivity.create({
-        data: {
-          clientId: result.clientId,
-          eventType: "payment_link.payment_failed",
-          summary: `A Razorpay payment attempt failed for this client's payment link.`,
-        },
+      await createActivityIfClient(result.clientId, {
+        eventType: "payment_link.payment_failed",
+        summary: `A Razorpay payment attempt failed for this client's payment link.`,
       });
       return { clientId: result.clientId };
     }
@@ -261,8 +262,9 @@ async function processEvent(
     case "payment_link.expired": {
       const result = await markLinkExpired(razorpayPaymentLinkId);
       if ("error" in result) return { clientId: null };
-      await prisma.clientActivity.create({
-        data: { clientId: result.clientId, eventType: "payment_link.expired", summary: "Payment link expired without full payment." },
+      await createActivityIfClient(result.clientId, {
+        eventType: "payment_link.expired",
+        summary: "Payment link expired without full payment.",
       });
       return { clientId: result.clientId };
     }

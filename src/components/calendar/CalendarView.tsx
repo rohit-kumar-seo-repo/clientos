@@ -10,7 +10,7 @@ export type CalendarEvent = {
   clientName: string;
   description: string;
   amountInPaise: number;
-  clientId: number;
+  clientId: number | null;
 };
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -249,12 +249,14 @@ export function CalendarView({
                         <span className="text-sm font-semibold text-neutral-900">
                           {fmtAmount(e.amountInPaise)}
                         </span>
-                        <Link
-                          href={`/clients/${e.clientId}`}
-                          className="text-xs text-neutral-400 hover:text-neutral-900 hover:underline"
-                        >
-                          View →
-                        </Link>
+                        {e.clientId && (
+                          <Link
+                            href={`/clients/${e.clientId}`}
+                            className="text-xs text-neutral-400 hover:text-neutral-900 hover:underline"
+                          >
+                            View →
+                          </Link>
+                        )}
                       </div>
                     </div>
                   ))}

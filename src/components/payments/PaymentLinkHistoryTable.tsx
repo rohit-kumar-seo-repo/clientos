@@ -13,7 +13,8 @@ export type PaymentLinkRow = {
   isUpiOnly: boolean;
   razorpayShortUrl: string;
   createdAt: Date;
-  client: { id: number; businessName: string };
+  client: { id: number; businessName: string } | null;
+  customerName: string | null;
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -65,7 +66,7 @@ export function PaymentLinkHistoryTable({ links }: { links: PaymentLinkRow[] }) 
           <thead className="border-b border-neutral-200 text-left text-neutral-500">
             <tr>
               <th className="px-4 py-3 font-medium">Created</th>
-              <th className="px-4 py-3 font-medium">Client</th>
+              <th className="px-4 py-3 font-medium">Customer</th>
               <th className="px-4 py-3 font-medium">Description</th>
               <th className="px-4 py-3 font-medium">Amount</th>
               <th className="px-4 py-3 font-medium">Type</th>
@@ -79,7 +80,12 @@ export function PaymentLinkHistoryTable({ links }: { links: PaymentLinkRow[] }) 
                 <td className="px-4 py-3 whitespace-nowrap text-neutral-600">
                   {new Date(link.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                 </td>
-                <td className="px-4 py-3 font-medium text-neutral-900">{link.client.businessName}</td>
+                <td className="px-4 py-3 font-medium text-neutral-900">
+                  {link.client?.businessName ?? link.customerName ?? "—"}
+                  {!link.client && (
+                    <span className="ml-1.5 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">New</span>
+                  )}
+                </td>
                 <td className="max-w-xs truncate px-4 py-3 text-neutral-700">{link.description}</td>
                 <td className="px-4 py-3 whitespace-nowrap font-medium text-neutral-900">
                   {fmtAmount(link.amountInPaise, link.currency)}

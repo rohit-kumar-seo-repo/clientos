@@ -80,6 +80,7 @@ describe("POST /api/webhooks/razorpay", () => {
     const period = await prisma.billingPeriod.findFirstOrThrow({ where: { billingPlanId: plan.id } });
     const link = await prisma.paymentLink.create({
       data: {
+        organizationId: orgId,
         clientId,
         billingPeriodId: period.id,
         razorpayPaymentLinkId: `plink_${Math.random().toString(36).slice(2, 10)}`,
@@ -127,6 +128,44 @@ describe("POST /api/webhooks/razorpay", () => {
     const event = await prisma.webhookEvent.findFirstOrThrow({});
     expect(event.processedAt).not.toBeNull();
     expect(event.processingError).toBeNull();
+  });
+
+  it("processes a payment on a client-less new-customer link without creating a ClientActivity", async () => {
+    const link = await prisma.paymentLink.create({
+      data: {
+        organizationId: orgId,
+        clientId: null,
+        razorpayPaymentLinkId: `plink_${Math.random().toString(36).slice(2, 10)}`,
+        razorpayShortUrl: "https://rzp.io/l/newcustomer",
+        description: "New customer deposit",
+        amountInPaise: 100000,
+        currency: "INR",
+        status: "CREATED",
+        customerName: "Priya Sharma",
+      },
+    });
+    vi.mocked(fetchPaymentLink).mockResolvedValue({ amount_paid: 100000 } as never);
+    vi.mocked(fetchPayment).mockResolvedValue({
+      status: "captured",
+      amount: 100000,
+      currency: "INR",
+      order_id: null,
+    } as never);
+
+    const response = await POST(buildRequest(paidEventBody(link.razorpayPaymentLinkId, "pay_no_client")));
+
+    expect(response.status).toBe(200);
+    const payment = await prisma.payment.findFirstOrThrow({ where: { razorpayPaymentId: "pay_no_client" } });
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: payment.invoiceId } });
+    expect(invoice.clientId).toBeNull();
+    expect(invoice.status).toBe("PAID");
+    const updatedLink = await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } });
+    expect(updatedLink.status).toBe("PAID");
+    const activity = await prisma.clientActivity.findMany({});
+    expect(activity).toHaveLength(0);
+    const event = await prisma.webhookEvent.findFirstOrThrow({});
+    expect(event.organizationId).toBe(orgId);
+    expect(event.processedAt).not.toBeNull();
   });
 
   it("does not re-fetch or re-process a payment status that isn't actually captured", async () => {

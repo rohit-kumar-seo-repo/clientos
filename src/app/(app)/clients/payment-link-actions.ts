@@ -104,7 +104,7 @@ function parseCommonFields(formData: FormData): { error: string } | CommonFields
 }
 
 function formatCreateError(
-  result: { error: string } | { paymentLink: unknown; clientId: number }
+  result: { error: string } | { paymentLink: unknown; clientId: number | null }
 ): string | null {
   if (!("error" in result)) return null;
   switch (result.error) {
@@ -288,6 +288,62 @@ export async function createCustomPaymentLinkAction(
   return { ok: true, paymentLink: toSummary(result.paymentLink) };
 }
 
+/**
+ * Custom payment link for a customer who isn't (yet) a ClientOS client.
+ * Obligation-backed links always require a real existing client (billing
+ * periods/milestones/add-ons belong to one), so this is custom-amount only —
+ * there's no "new customer" equivalent for those three kinds.
+ */
+export async function createNewCustomerPaymentLinkAction(formData: FormData): Promise<CreateActionResult> {
+  const admin = await requireAdmin();
+
+  const common = parseCommonFields(formData);
+  if ("error" in common) return common;
+  if (!common.customerNameOverride) return { error: "Customer name is required." };
+
+  const amountInRupees = Number(formData.get("amountInRupees"));
+  const amountInPaise = Math.round(amountInRupees * 100);
+  if (!Number.isFinite(amountInRupees) || amountInPaise < 1 || amountInPaise > MAX_PAYMENT_LINK_AMOUNT_IN_PAISE) {
+    return { error: "Amount must be between ₹0.01 and ₹1,00,00,000." };
+  }
+  const currency = String(formData.get("currency") ?? "INR").toUpperCase();
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) return { error: "A description is required." };
+
+  const saveAsClient = formData.get("saveAsClient") === "on";
+
+  const result = await createPaymentLinkForObligation({
+    kind: "newCustomer",
+    organizationId: admin.organizationId,
+    saveAsClient,
+    amountInPaise,
+    currency,
+    description,
+    createdByAdminId: admin.id,
+    ...common,
+  });
+  const errorMessage = formatCreateError(result);
+  if (errorMessage) return { error: errorMessage };
+  if (!("paymentLink" in result)) return { error: "Could not create the payment link." };
+
+  if (result.clientId) {
+    await prisma.clientActivity.create({
+      data: {
+        clientId: result.clientId,
+        actorAdminId: admin.id,
+        eventType: "payment_link.created",
+        summary: `Custom payment link created for new customer "${common.customerNameOverride}": "${description}" (${currency} ${(amountInPaise / 100).toLocaleString("en-IN")}).`,
+      },
+    });
+  }
+
+  revalidatePath("/");
+  revalidatePath("/calendar");
+  revalidatePath("/payments");
+  if (result.clientId) revalidatePath(`/clients/${result.clientId}`);
+  return { ok: true, paymentLink: toSummary(result.paymentLink) };
+}
+
 export async function cancelPaymentLinkAction(paymentLinkId: number): Promise<ActionResult> {
   if (!Number.isInteger(paymentLinkId)) return { error: "Payment link not found." };
   const { admin, paymentLink } = await requirePaymentLinkInOwnOrg(paymentLinkId);
@@ -300,19 +356,21 @@ export async function cancelPaymentLinkAction(paymentLinkId: number): Promise<Ac
     return { error: "Payment link not found." };
   }
 
-  await prisma.clientActivity.create({
-    data: {
-      clientId: paymentLink.clientId,
-      actorAdminId: admin.id,
-      eventType: "payment_link.cancelled",
-      summary: `Payment link cancelled: "${paymentLink.description}".`,
-    },
-  });
+  if (paymentLink.clientId) {
+    await prisma.clientActivity.create({
+      data: {
+        clientId: paymentLink.clientId,
+        actorAdminId: admin.id,
+        eventType: "payment_link.cancelled",
+        summary: `Payment link cancelled: "${paymentLink.description}".`,
+      },
+    });
+  }
 
   revalidatePath("/");
   revalidatePath("/calendar");
   revalidatePath("/payments");
-  revalidatePath(`/clients/${paymentLink.clientId}`);
+  if (paymentLink.clientId) revalidatePath(`/clients/${paymentLink.clientId}`);
   return { ok: true };
 }
 

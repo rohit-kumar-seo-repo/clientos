@@ -95,7 +95,7 @@ export async function requirePaymentLinkInOwnOrg(paymentLinkId: number) {
   const paymentLink = await prisma.paymentLink.findFirst({
     where: {
       id: paymentLinkId,
-      client: { organizationId: admin.organizationId },
+      organizationId: admin.organizationId,
     },
     include: { client: true },
   });
