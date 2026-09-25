@@ -376,9 +376,9 @@ describe("getMonthlySummary", () => {
       summary.recurring.expectedInPaise + summary.projects.expectedInPaise
     );
     expect(summary.totals.collectedInPaise).toBe(
-      summary.recurring.collectedInPaise + summary.projects.collectedInPaise
+      summary.recurring.collectedInPaise + summary.projects.collectedInPaise + summary.custom.collectedInPaise
     );
-    expect(summary.totals.paymentCount).toBe(2);
+    expect(summary.totals.paymentCount).toBe(2 + summary.custom.paymentCount);
   });
 
   // Regression for the 2026-09-15 bug report: recurring Expected ₹48,500 +
@@ -415,6 +415,100 @@ describe("getMonthlySummary", () => {
     expect(summary.recurring.expectedInPaise).toBe(4850000);
     expect(summary.projects.expectedInPaise).toBe(7000000);
     expect(summary.totals.expectedInPaise).toBe(11850000); // ₹1,18,500
+  });
+
+  // ── Custom / unassigned payments ────────────────────────────────────────
+  // A custom Payment Link's Invoice always has zero line items — that's the
+  // one thing distinguishing it from every obligation-backed payment.
+
+  it("counts a captured custom payment for an existing client toward custom.collectedInPaise, not recurring or projects", async () => {
+    const invoice = await prisma.invoice.create({
+      data: { clientId, invoiceNumber: "INV-CUST1", totalAmountInPaise: 100000, currency: "INR", status: "PAID", dueDate: TODAY },
+    });
+    await prisma.payment.create({
+      data: { invoiceId: invoice.id, status: "CAPTURED", amountInPaise: 100000, capturedAt: TODAY, method: "razorpay" },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.custom.collectedInPaise).toBe(100000);
+    expect(summary.custom.paymentCount).toBe(1);
+    expect(summary.recurring.collectedInPaise).toBe(0);
+    expect(summary.projects.collectedInPaise).toBe(0);
+  });
+
+  it("counts a captured client-less new-customer payment toward custom.collectedInPaise, scoped via its PaymentLink", async () => {
+    const link = await prisma.paymentLink.create({
+      data: {
+        organizationId: orgId,
+        clientId: null,
+        razorpayPaymentLinkId: "plink_dashboard_test",
+        razorpayShortUrl: "https://rzp.io/l/test",
+        description: "New customer deposit",
+        amountInPaise: 100,
+        status: "PAID",
+        customerName: "Priya Sharma",
+      },
+    });
+    const invoice = await prisma.invoice.create({
+      data: { clientId: null, invoiceNumber: "INV-CUST2", totalAmountInPaise: 100, currency: "INR", status: "PAID", dueDate: TODAY },
+    });
+    await prisma.payment.create({
+      data: { invoiceId: invoice.id, paymentLinkId: link.id, status: "CAPTURED", amountInPaise: 100, capturedAt: TODAY, method: "razorpay" },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.custom.collectedInPaise).toBe(100);
+    expect(summary.custom.paymentCount).toBe(1);
+  });
+
+  it("excludes a custom payment captured in a prior month", async () => {
+    const invoice = await prisma.invoice.create({
+      data: { clientId, invoiceNumber: "INV-CUST3", totalAmountInPaise: 100000, currency: "INR", status: "PAID", dueDate: TODAY },
+    });
+    await prisma.payment.create({
+      data: {
+        invoiceId: invoice.id,
+        status: "CAPTURED",
+        amountInPaise: 100000,
+        capturedAt: new Date(Date.UTC(2026, 7, 15)), // August — before TODAY's September
+        method: "razorpay",
+      },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.custom.collectedInPaise).toBe(0);
+    expect(summary.custom.paymentCount).toBe(0);
+  });
+
+  it("excludes a non-CAPTURED custom payment", async () => {
+    const invoice = await prisma.invoice.create({
+      data: { clientId, invoiceNumber: "INV-CUST4", totalAmountInPaise: 100000, currency: "INR", status: "DUE", dueDate: TODAY },
+    });
+    await prisma.payment.create({
+      data: { invoiceId: invoice.id, status: "FAILED", amountInPaise: 100000, method: "razorpay" },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.custom.collectedInPaise).toBe(0);
+  });
+
+  it("never includes another organization's custom payments", async () => {
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org" } });
+    const otherClient = await prisma.client.create({ data: { organizationId: otherOrg.id, businessName: "Other Client" } });
+    const invoice = await prisma.invoice.create({
+      data: { clientId: otherClient.id, invoiceNumber: "INV-OTHERORG", totalAmountInPaise: 100000, currency: "INR", status: "PAID", dueDate: TODAY },
+    });
+    await prisma.payment.create({
+      data: { invoiceId: invoice.id, status: "CAPTURED", amountInPaise: 100000, capturedAt: TODAY, method: "razorpay" },
+    });
+
+    const summary = await getMonthlySummary(orgId, TODAY);
+
+    expect(summary.custom.collectedInPaise).toBe(0);
   });
 });
 

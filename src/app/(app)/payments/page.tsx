@@ -129,19 +129,24 @@ export default async function PaymentsPage({
   const lastMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const lastMonth = `${lastMonthDate.getUTCFullYear()}-${String(lastMonthDate.getUTCMonth() + 1).padStart(2, "0")}`;
 
-  const thisMonthPayments = payments.filter((p) => paymentMonth(p) === curMonth);
+  // "Collected" means money that actually landed — the table below still
+  // shows every attempt (including FAILED, for follow-up), but the summary
+  // totals only ever count CAPTURED payments.
+  const capturedPayments = payments.filter((p) => p.status === "CAPTURED");
+
+  const thisMonthPayments = capturedPayments.filter((p) => paymentMonth(p) === curMonth);
   const thisMonthTotal = thisMonthPayments.reduce(
     (s, p) => s + p.amountInPaise,
     0
   );
 
-  const lastMonthPayments = payments.filter((p) => paymentMonth(p) === lastMonth);
+  const lastMonthPayments = capturedPayments.filter((p) => paymentMonth(p) === lastMonth);
   const lastMonthTotal = lastMonthPayments.reduce(
     (s, p) => s + p.amountInPaise,
     0
   );
 
-  const allTimeTotal = payments.reduce((s, p) => s + p.amountInPaise, 0);
+  const allTimeTotal = capturedPayments.reduce((s, p) => s + p.amountInPaise, 0);
 
   function fmtAmount(paise: number) {
     return `₹${(paise / 100).toLocaleString("en-IN")}`;
@@ -222,7 +227,7 @@ export default async function PaymentsPage({
             {fmtAmount(allTimeTotal)}
           </p>
           <p className="mt-0.5 text-xs text-neutral-400">
-            {payments.length} payment{payments.length !== 1 ? "s" : ""}
+            {capturedPayments.length} payment{capturedPayments.length !== 1 ? "s" : ""}
           </p>
         </div>
       </div>

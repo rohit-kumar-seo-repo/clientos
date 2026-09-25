@@ -69,17 +69,25 @@ export type MonthlySummary = {
     pendingInPaise: number;
     overdueInPaise: number;
   };
-  // Grand totals — ALWAYS recurring + projects, nothing else. Never derive
-  // these from a separately date-filtered query: that's exactly what caused
-  // a real bug (2026-09-15) where "Expected This Month" used projects' this-
-  // month-due obligations while the visible "One-Time Projects" card used
-  // the full base amount, so the KPI total silently didn't match the sum of
-  // the two cards on screen. Defining totals as a pure sum of the fields
+  // Custom / unassigned Payment Link payments — no BillingPeriod, no
+  // ProjectMilestone, no ProjectAddOn behind them (an empty-line-item
+  // Invoice), so there is no "obligation" for an Expected/Pending/Overdue
+  // figure to mean anything against. Client-based or client-less alike.
+  custom: {
+    collectedInPaise: number; // this month, by capturedAt — same month scope as recurring
+    paymentCount: number;     // actual Payment rows, not obligations (there are none to count)
+  };
+  // Grand totals — ALWAYS recurring + projects + custom, nothing else. Never
+  // derive these from a separately date-filtered query: that's exactly what
+  // caused a real bug (2026-09-15) where "Expected This Month" used projects'
+  // this-month-due obligations while the visible "One-Time Projects" card
+  // used the full base amount, so the KPI total silently didn't match the
+  // sum of the cards on screen. Defining totals as a pure sum of the fields
   // above makes that class of bug structurally impossible going forward.
   totals: {
-    expectedInPaise: number;  // = recurring.expectedInPaise + projects.expectedInPaise
-    collectedInPaise: number; // = recurring.collectedInPaise + projects.collectedInPaise
-    paymentCount: number;     // recurring payments this month + all-time project payments
+    expectedInPaise: number;  // = recurring.expectedInPaise + projects.expectedInPaise (custom has none)
+    collectedInPaise: number; // = recurring.collectedInPaise + projects.collectedInPaise + custom.collectedInPaise
+    paymentCount: number;     // recurring/project obligations paid + custom payments, this month
   };
 };
 
@@ -194,6 +202,25 @@ export async function getMonthlySummary(
     .filter((o) => o.status === "PENDING" && o.dueDate !== null && o.dueDate < normalizedToday)
     .reduce((s, o) => s + o.amountInPaise, 0);
 
+  // ── Custom / unassigned payments (no obligation behind them) ────────────────
+  // A custom Payment Link's Invoice always has zero line items (see
+  // payment-links.ts) — that's the one thing that distinguishes it from every
+  // obligation-backed payment, client-based or client-less alike. Org scope
+  // has to come from the invoice's client OR the payment's own PaymentLink,
+  // since a client-less payment has no invoice.client to join through.
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
+  const customThisMonth = await prisma.payment.aggregate({
+    _sum: { amountInPaise: true },
+    _count: true,
+    where: {
+      status: "CAPTURED",
+      capturedAt: { gte: monthStart, lt: monthEnd },
+      invoice: { lineItems: { none: {} } },
+      OR: [{ invoice: { client: { organizationId } } }, { paymentLink: { organizationId } }],
+    },
+  });
+
   const recurring = {
     expectedInPaise,
     collectedInPaise,
@@ -209,16 +236,21 @@ export async function getMonthlySummary(
     ),
     overdueInPaise: projectOverdueAllInPaise,
   };
+  const custom = {
+    collectedInPaise: customThisMonth._sum.amountInPaise ?? 0,
+    paymentCount: customThisMonth._count,
+  };
 
   return {
     recurring,
     projects,
-    // Pure sum of the two objects above — see the type's comment for why
-    // this must never be computed any other way.
+    custom,
+    // Pure sum of the fields above — see the type's comment for why this
+    // must never be computed any other way.
     totals: {
       expectedInPaise: recurring.expectedInPaise + projects.expectedInPaise,
-      collectedInPaise: recurring.collectedInPaise + projects.collectedInPaise,
-      paymentCount: paidThisMonthPeriodIds.length + paidObligations.length,
+      collectedInPaise: recurring.collectedInPaise + projects.collectedInPaise + custom.collectedInPaise,
+      paymentCount: paidThisMonthPeriodIds.length + paidObligations.length + custom.paymentCount,
     },
   };
 }

@@ -65,7 +65,7 @@ function Section({
 }
 
 export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
-  const { recurring, projects } = summary;
+  const { recurring, projects, custom } = summary;
 
   const now = new Date();
   const monthLabel = now.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
@@ -87,7 +87,7 @@ export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
             overdue={recurring.overdueInPaise}
           />
         </div>
-        <div className="pt-4">
+        <div className="py-4">
           <Section
             title="One-Time Projects"
             expected={projects.expectedInPaise}
@@ -96,6 +96,22 @@ export function MonthlySummary({ summary }: { summary: MonthlySummaryData }) {
             overdue={projects.overdueInPaise}
           />
         </div>
+        {custom.paymentCount > 0 && (
+          <div className="pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+              Custom Payments
+            </p>
+            <p className="mt-1 text-xs text-neutral-400">
+              No linked billing period, milestone, or add-on — not counted toward Recurring or Project totals above.
+            </p>
+            <div className="mt-2 flex items-baseline justify-between">
+              <span className="text-sm font-semibold text-emerald-700">{fmt(custom.collectedInPaise)}</span>
+              <span className="text-xs text-neutral-500">
+                {custom.paymentCount} {custom.paymentCount === 1 ? "payment" : "payments"} this month
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

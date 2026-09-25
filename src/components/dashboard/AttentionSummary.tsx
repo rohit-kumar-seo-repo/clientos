@@ -156,14 +156,15 @@ export function AttentionSummary({
       />
 
       {/* 2. Total Collected Payment — recurring collected this month + all
-             project payments ever collected. Always == recurring.collected +
-             projects.collected, same guarantee as the card above. */}
+             project payments ever collected + custom/unassigned payments
+             this month. Always == recurring.collected + projects.collected +
+             custom.collected, same guarantee as the card above. */}
       <KpiCard
         label="Total Collected Payment"
         value={fmt(summary.totals.collectedInPaise)}
         caption={
           <>
-            {summary.totals.paymentCount} {summary.totals.paymentCount === 1 ? "payment" : "payments"} · recurring + one-time projects
+            {summary.totals.paymentCount} {summary.totals.paymentCount === 1 ? "payment" : "payments"} · recurring + projects + custom
           </>
         }
         icon={<CheckCircleIcon className={icon18} />}
